@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trading Dashboard - Time Series</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { background: #0f172a; color: #e2e8f0; font-family: system-ui, sans-serif; }
+    .card { background: #1e293b; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+    .positive { color: #10b981; }
+    .negative { color: #ef4444; }
+    .btn { background: #3b82f6; color: white; padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-size: 14px; }
+    .btn:hover { background: #2563eb; }
+    .btn.active { background: #10b981; }
+    .chart-container { position: relative; height: 300px; width: 100%; }
+    .stat-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #334155; }
+    .stat-label { color: #94a3b8; }
+  </style>
+</head>
+<body class="p-6">
+  <div class="max-w-7xl mx-auto">
+    <div class="flex justify-between items-center mb-6">
+      <div>
+        <h1 class="text-3xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
+          Trading Dashboard
+        </h1>
+        <p class="text-gray-400 mt-1">Time-Based Performance Analysis</p>
+      </div>
+      <span class="bg-yellow-500/20 text-yellow-400 px-3 py-1 rounded text-sm">PAPER TRADING</span>
+    </div>
+
+    <div class="card">
+      <div class="flex flex-wrap mb-4">
+        <button onclick="changeRange('1H')" id="btn-1H" class="btn mr-2 mb-2">1 Hour</button>
+        <button onclick="changeRange('1D')" id="btn-1D" class="btn mr-2 mb-2 active">1 Day</button>
+        <button onclick="changeRange('1W')" id="btn-1W" class="btn mr-2 mb-2">1 Week</button>
+        <button onclick="changeRange('1M')" id="btn-1M" class="btn mr-2 mb-2">1 Month</button>
+        <button onclick="changeRange('YTD')" id="btn-YTD" class="btn mr-2 mb-2">YTD</button>
+        <button onclick="changeRange('1Y')" id="btn-1Y" class="btn mr-2 mb-2">1 Year</button>
+      </div>
+      
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div class="lg:col-span-2">
+          <div class="chart-container">
+            <canvas id="mainChart"></canvas>
+          </div>
+        </div>
+        <div class="bg-gray-800/50 rounded-lg p-4">
+          <h3 class="font-semibold mb-4 text-lg">Period Statistics</h3>
+          <div id="periodStats"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-4 gap-4 mb-6">
+      <div class="card">
+        <p class="text-gray-400 text-sm">Current Value</p>
+        <p class="text-2xl font-bold" id="currentValue"></p>
+      </div>
+      <div class="card">
+        <p class="text-gray-400 text-sm">Period Start</p>
+        <p class="text-2xl font-bold" id="periodStart"></p>
+        <p class="text-sm text-gray-400" id="periodStartDate"></p>
+      </div>
+      <div class="card">
+        <p class="text-gray-400 text-sm">Period High</p>
+        <p class="text-2xl font-bold positive" id="periodHigh"></p>
+      </div>
+      <div class="card">
+        <p class="text-gray-400 text-sm">Period Low</p>
+        <p class="text-2xl font-bold negative" id="periodLow"></p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const timeData = {
+      '1H': {
+        labels: ['10:00', '10:15', '10:30', '10:45', '11:00', '11:15', '11:30', '11:45', '12:00'],
+        values: [12500, 12512, 12495, 12520, 12535, 12528, 12540, 12547, 12547],
+        startValue: 12500,
+        startDate: '1 hour ago',
+        high: 12547,
+        low: 12495
+      },
+      '1D': {
+        labels: ['00:00', '03:00', '06:00', '09:00', '12:00', '15:00', '18:00', '21:00', '24:00'],
+        values: [12205, 12120, 11980, 12540, 12200, 11890, 12150, 12400, 12547],
+        startValue: 12205,
+        startDate: '24 hours ago',
+        high: 12540,
+        low: 11890
+      },
+      '1W': {
+        labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+        values: [11000, 11250, 11500, 11400, 11800, 12100, 12547],
+        startValue: 11000,
+        startDate: '7 days ago',
+        high: 12547,
+        low: 11000
+      },
+      '1M': {
+        labels: ['Week 1', 'Week 2', 'Week 3', 'Week 4'],
+        values: [10000, 10500, 11500, 12547],
+        startValue: 10000,
+        startDate: '30 days ago',
+        high: 12547,
+        low: 9800
+      },
+      'YTD': {
+        labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May'],
+        values: [8500, 9200, 10500, 11800, 12547],
+        startValue: 8500,
+        startDate: 'Jan 1, 2026',
+        high: 12547,
+        low: 8200
+      },
+      '1Y': {
+        labels: ['Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar', 'Apr', 'May'],
+        values: [5000, 5500, 6200, 7000, 7800, 8500, 8200, 9200, 10500, 11200, 11800, 12547],
+        startValue: 5000,
+        startDate: '1 year ago',
+        high: 12547,
+        low: 4800
+      }
+    };
+
+    let currentRange = '1D';
+    let mainChart = null;
+
+    function formatCurrency(value) {
+      return '$' + value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function calculateYRange(values) {
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const range = max - min;
+      const padding = range * 0.1;
+      return {
+        min: Math.floor(min - padding),
+        max: Math.ceil(max + padding)
+      };
+    }
+
+    function updateStats(range) {
+      const data = timeData[range];
+      const current = data.values[data.values.length - 1];
+      const change = current - data.startValue;
+      const changePct = (change / data.startValue) * 100;
+
+      document.getElementById('currentValue').innerHTML = formatCurrency(current) + 
+        '<span class="text-sm ' + (change >= 0 ? 'positive' : 'negative') + ' ml-2">' + 
+        (change >= 0 ? '+' : '') + formatCurrency(change) + ' (' + changePct.toFixed(2) + '%)</span>';
+      
+      document.getElementById('periodStart').textContent = formatCurrency(data.startValue);
+      document.getElementById('periodStartDate').textContent = data.startDate;
+      document.getElementById('periodHigh').textContent = formatCurrency(data.high);
+      document.getElementById('periodLow').textContent = formatCurrency(data.low);
+
+      document.getElementById('periodStats').innerHTML = 
+        '<div class="stat-row"><span class="stat-label">Starting Price</span><span>' + formatCurrency(data.startValue) + '</span></div>' +
+        '<div class="stat-row"><span class="stat-label">Current Price</span><span>' + formatCurrency(current) + '</span></div>' +
+        '<div class="stat-row"><span class="stat-label">Period High</span><span class="positive">' + formatCurrency(data.high) + '</span></div>' +
+        '<div class="stat-row"><span class="stat-label">Period Low</span><span class="negative">' + formatCurrency(data.low) + '</span></div>' +
+        '<div class="stat-row"><span class="stat-label">Change</span><span class="' + (change >= 0 ? 'positive' : 'negative') + '">' + 
+        (change >= 0 ? '+' : '') + formatCurrency(change) + '</span></div>' +
+        '<div class="stat-row"><span class="stat-label">Change %</span><span class="' + (change >= 0 ? 'positive' : 'negative') + '">' + 
+        (change >= 0 ? '+' : '') + changePct.toFixed(2) + '%</span></div>';
+    }
+
+    function renderChart(range) {
+      const data = timeData[range];
+      const ctx = document.getElementById('mainChart').getContext('2d');
+      const yRange = calculateYRange(data.values);
+      const current = data.values[data.values.length - 1];
+      const isUp = current >= data.startValue;
+
+      if (mainChart) {
+        mainChart.destroy();
+      }
+
+      mainChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: data.labels,
+          datasets: [{
+            label: 'Portfolio Value',
+            data: data.values,
+            borderColor: isUp ? '#10b981' : '#ef4444',
+            backgroundColor: isUp ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+            fill: true,
+            tension: 0.4,
+            pointRadius: 4,
+            pointHoverRadius: 6
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { intersect: false, mode: 'index' },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: '#1e293b',
+              titleColor: '#e2e8f0',
+              bodyColor: '#e2e8f0',
+              borderColor: '#334155',
+              borderWidth: 1,
+              padding: 12,
+              callbacks: {
+                label: function(context) {
+                  const value = context.parsed.y;
+                  const change = value - data.startValue;
+                  const changePct = ((change / data.startValue) * 100).toFixed(2);
+                  return [
+                    'Value: ' + formatCurrency(value),
+                    'From Start: ' + (change >= 0 ? '+' : '') + formatCurrency(change) + ' (' + changePct + '%)'
+                  ];
+                }
+              }
+            }
+          },
+          scales: {
+            y: {
+              grid: { color: '#334155' },
+              ticks: {
+                color: '#94a3b8',
+                callback: function(value) {
+                  if (value >= 1000000) return '$' + (value / 1000000).toFixed(1) + 'M';
+                  if (value >= 1000) return '$' + (value / 1000).toFixed(1) + 'K';
+                  return '$' + value;
+                }
+              },
+              min: yRange.min,
+              max: yRange.max
+            },
+            x: {
+              grid: { display: false },
+              ticks: { color: '#94a3b8' }
+            }
+          }
+        }
+      });
+    }
+
+    function changeRange(range) {
+      document.querySelectorAll('.btn').forEach(btn => btn.classList.remove('active'));
+      document.getElementById('btn-' + range).classList.add('active');
+      currentRange = range;
+      renderChart(range);
+      updateStats(range);
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+      renderChart('1D');
+      updateStats('1D');
+    });
+  </script>
+</body>
+</html>

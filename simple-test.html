@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Simple API Test</title>
+</head>
+<body>
+  <h1>Simple API Test</h1>
+  <div id="result">Loading...</div>
+  <script>
+    fetch('http://localhost:3002/api/status')
+      .then(r => r.json())
+      .then(d => {
+        document.getElementById('result').innerHTML = 
+          '<b style="color:green">API WORKS!</b><br>' +
+          'Value: $' + d.portfolio.totalValue + '<br>' +
+          'Trades: ' + d.stats.totalTrades + '<br>' +
+          'Auto: ' + d.autoTrading.enabled;
+      })
+      .catch(e => {
+        document.getElementById('result').innerHTML = 
+          '<b style="color:red">ERROR:</b> ' + e.message;
+      });
+  </script>
+</body>
+</html>

@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trading Dashboard - Live</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { background: #0f172a; color: #e2e8f0; font-family: system-ui, sans-serif; }
+    .card { background: #1e293b; border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+    .positive { color: #10b981; }
+    .negative { color: #ef4444; }
+    .stat-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #334155; font-size: 13px; }
+    .table-row { display: flex; flex-direction: row; padding: 6px 0; border-bottom: 1px solid #334155; font-size: 13px; }
+    .log-entry { font-family: monospace; font-size: 11px; padding: 3px 0; border-bottom: 1px solid #1e293b; }
+    .signal-item { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid #1e293b; font-size: 11px; }
+    .signal-box { background: #0f172a; border-radius: 8px; padding: 10px; }
+    .signal-title { font-size: 11px; font-weight: bold; color: #94a3b8; margin-bottom: 6px; }
+    .progress-bar { background: #334155; border-radius: 4px; height: 6px; }
+    .progress-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
+  </style>
+</head>
+<body class="p-4">
+  <div class="max-w-7xl mx-auto">
+    <!-- Header -->
+    <div class="flex justify-between items-center mb-4">
+      <div>
+        <h1 class="text-2xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">📊 Trading Dashboard</h1>
+        <p class="text-gray-400 text-xs">1-Week Paper Trading Test • BTC ETH SOL BNB ADA LINK</p>
+      </div>
+      <div class="flex items-center gap-3">
+        <span id="statusDot" class="w-2 h-2 rounded-full bg-green-500"></span>
+        <span id="statusText" class="text-green-400 text-sm">LIVE</span>
+        <span class="bg-yellow-500/20 text-yellow-400 px-2 py-1 rounded text-xs">PAPER $500</span>
+        <select id="strategySelect" class="bg-gray-700 rounded px-2 py-1 text-xs">
+          <option value="mixed">Mixed</option>
+          <option value="momentum-breakout">Momentum</option>
+          <option value="mean-reversion">Mean Reversion</option>
+          <option value="llm">LLM</option>
+          <option value="grid">Grid</option>
+          <option value="dca">DCA</option>
+          <option value="trend-following">Trend</option>
+          <option value="scalp">Scalp</option>
+          <option value="breakout">Breakout</option>
+          <option value="rule-based">Rule-Based</option>
+          <option value="random">Random</option>
+        </select>
+        <button onclick="startAuto()" class="bg-green-600 px-3 py-1 rounded text-xs">▶ Auto</button>
+        <button onclick="stopAuto()" class="bg-red-600 px-3 py-1 rounded text-xs">⏹</button>
+      </div>
+    </div>
+
+    <!-- ROW 1: Token Prices -->
+    <div class="card mb-4">
+      <div class="grid grid-cols-6 gap-4">
+        <div class="text-center"><div class="text-yellow-400 text-sm font-bold">BTC</div><div class="text-xl font-bold" id="price-BTC">$--</div><div class="text-xs text-gray-400" id="sig-BTC">HOLD</div></div>
+        <div class="text-center"><div class="text-purple-400 text-sm font-bold">ETH</div><div class="text-xl font-bold" id="price-ETH">$--</div><div class="text-xs text-gray-400" id="sig-ETH">HOLD</div></div>
+        <div class="text-center"><div class="text-green-400 text-sm font-bold">SOL</div><div class="text-xl font-bold" id="price-SOL">$--</div><div class="text-xs text-gray-400" id="sig-SOL">HOLD</div></div>
+        <div class="text-center"><div class="text-yellow-300 text-sm font-bold">BNB</div><div class="text-xl font-bold" id="price-BNB">$--</div><div class="text-xs text-gray-400" id="sig-BNB">HOLD</div></div>
+        <div class="text-center"><div class="text-blue-400 text-sm font-bold">ADA</div><div class="text-xl font-bold" id="price-ADA">$--</div><div class="text-xs text-gray-400" id="sig-ADA">HOLD</div></div>
+        <div class="text-center"><div class="text-cyan-400 text-sm font-bold">LINK</div><div class="text-xl font-bold" id="price-LINK">$--</div><div class="text-xs text-gray-400" id="sig-LINK">HOLD</div></div>
+      </div>
+    </div>
+
+    <!-- ROW 2: Portfolio Chart + Risk Analysis -->
+    <div class="grid grid-cols-2 gap-4 mb-4">
+      <div class="card">
+        <h3 class="font-semibold mb-2 text-sm">📈 Portfolio Value</h3>
+        <div style="height: 150px"><canvas id="portfolioChart"></canvas></div>
+        <div class="grid grid-cols-3 gap-2 mt-2 text-center">
+          <div><div class="text-xs text-gray-400">Current</div><div class="text-sm font-bold" id="currentValue">$500.00</div></div>
+          <div><div class="text-xs text-gray-400">Peak</div><div class="text-sm font-bold positive" id="peakValue">$500.00</div></div>
+          <div><div class="text-xs text-gray-400">Trough</div><div class="text-sm font-bold negative" id="troughValue">$500.00</div></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3 class="font-semibold mb-2 text-sm">⚠️ Risk Analysis</h3>
+        <div class="space-y-2">
+          <div>
+            <div class="flex justify-between text-xs mb-1"><span class="text-gray-400">Win Rate</span><span id="winRateDisplay">0%</span></div>
+            <div class="progress-bar"><div class="progress-fill bg-green-500" id="winRateBar" style="width: 0%"></div></div>
+          </div>
+          <div>
+            <div class="flex justify-between text-xs mb-1"><span class="text-gray-400">Exposure</span><span id="exposureDisplay">0%</span></div>
+            <div class="progress-bar"><div class="progress-fill bg-yellow-500" id="exposureBar" style="width: 0%"></div></div>
+          </div>
+          <div class="stat-row"><span class="text-gray-400">Volatility</span><span id="volatility">--</span></div>
+          <div class="stat-row"><span class="text-gray-400">Sharpe Ratio</span><span id="sharpeRatio">--</span></div>
+          <div class="stat-row"><span class="text-gray-400">Max Drawdown</span><span id="maxDrawdown">--</span></div>
+          <div class="stat-row"><span class="text-gray-400">Profit Factor</span><span id="profitFactor">--</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ROW 3: Trade Stats + Strategy Performance -->
+    <div class="grid grid-cols-2 gap-4 mb-4">
+      <div class="card">
+        <h3 class="font-semibold mb-2 text-sm">📊 Trade Statistics</h3>
+        <div class="grid grid-cols-2 gap-2">
+          <div class="stat-row"><span class="text-gray-400">Total Trades</span><span id="totalTrades">0</span></div>
+          <div class="stat-row"><span class="text-gray-400">Winning</span><span class="positive" id="winningTrades">0</span></div>
+          <div class="stat-row"><span class="text-gray-400">Losing</span><span class="negative" id="losingTrades">0</span></div>
+          <div class="stat-row"><span class="text-gray-400">Win Rate</span><span id="winRateStat">0%</span></div>
+          <div class="stat-row"><span class="text-gray-400">Largest Win</span><span class="positive" id="largestWin">--</span></div>
+          <div class="stat-row"><span class="text-gray-400">Largest Loss</span><span class="negative" id="largestLoss">--</span></div>
+          <div class="stat-row"><span class="text-gray-400">Avg Duration</span><span id="avgDuration">--</span></div>
+          <div class="stat-row"><span class="text-gray-400">Consec Wins</span><span class="positive" id="consecWins">0</span></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3 class="font-semibold mb-2 text-sm">🎯 Strategy Performance</h3>
+        <div id="strategyPerformance" class="max-h-40 overflow-y-auto">
+          <p class="text-gray-500 text-xs">Execute trades to see strategy analytics</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ROW 4: Open Positions + Activity Log -->
+    <div class="grid grid-cols-2 gap-4 mb-4">
+      <div class="card">
+        <h3 class="font-semibold mb-2 text-sm">📋 Open Positions</h3>
+        <div id="openPositions" class="max-h-40 overflow-y-auto">
+          <p class="text-gray-500 text-xs">No open positions</p>
+        </div>
+      </div>
+      <div class="card">
+        <h3 class="font-semibold mb-2 text-sm">📜 Activity Log</h3>
+        <div id="terminal" class="max-h-40 overflow-y-auto">
+          <div class="text-gray-500 text-xs">Dashboard ready...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ROW 5: All Strategy Signals (full width) -->
+    <div class="card">
+      <h3 class="font-semibold mb-2 text-sm">🎯 All Strategy Signals (All 6 Tokens)</h3>
+      <div class="grid grid-cols-6 gap-2" id="signalsContainer">
+        <!-- Populated by JS -->
+      </div>
+    </div>
+
+    <!-- ROW 6: Social Sentiment (full width) -->
+    <div class="card">
+      <h3 class="font-semibold mb-2 text-sm">🗣️ Social Sentiment</h3>
+      <div class="grid grid-cols-6 gap-4" id="sentimentContainer">
+        <div class="text-center">
+          <div class="text-yellow-400 text-sm font-bold mb-1">BTC</div>
+          <div class="text-2xl font-bold positive" id="sent-BTC-score">0.35</div>
+          <div class="text-xs text-gray-400">F/G: <span id="sent-BTC-fg">58</span></div>
+          <div class="text-xs" id="sent-BTC-mom">stable</div>
+        </div>
+        <div class="text-center">
+          <div class="text-purple-400 text-sm font-bold mb-1">ETH</div>
+          <div class="text-2xl font-bold positive" id="sent-ETH-score">0.28</div>
+          <div class="text-xs text-gray-400">F/G: <span id="sent-ETH-fg">54</span></div>
+          <div class="text-xs" id="sent-ETH-mom">increasing</div>
+        </div>
+        <div class="text-center">
+          <div class="text-green-400 text-sm font-bold mb-1">SOL</div>
+          <div class="text-2xl font-bold positive" id="sent-SOL-score">0.42</div>
+          <div class="text-xs text-gray-400">F/G: <span id="sent-SOL-fg">61</span></div>
+          <div class="text-xs" id="sent-SOL-mom">increasing</div>
+        </div>
+        <div class="text-center">
+          <div class="text-yellow-300 text-sm font-bold mb-1">BNB</div>
+          <div class="text-2xl font-bold positive" id="sent-BNB-score">0.31</div>
+          <div class="text-xs text-gray-400">F/G: <span id="sent-BNB-fg">56</span></div>
+          <div class="text-xs" id="sent-BNB-mom">stable</div>
+        </div>
+        <div class="text-center">
+          <div class="text-blue-400 text-sm font-bold mb-1">ADA</div>
+          <div class="text-2xl font-bold positive" id="sent-ADA-score">0.25</div>
+          <div class="text-xs text-gray-400">F/G: <span id="sent-ADA-fg">52</span></div>
+          <div class="text-xs" id="sent-ADA-mom">stable</div>
+        </div>
+        <div class="text-center">
+          <div class="text-cyan-400 text-sm font-bold mb-1">LINK</div>
+          <div class="text-2xl font-bold positive" id="sent-LINK-score">0.38</div>
+          <div class="text-xs text-gray-400">F/G: <span id="sent-LINK-fg">60</span></div>
+          <div class="text-xs" id="sent-LINK-mom">increasing</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API = 'http://localhost:3002';
+    const TOKENS = ['BTC', 'ETH', 'SOL', 'BNB', 'ADA', 'LINK'];
+    const STRATEGIES = ['momentum-breakout', 'mean-reversion', 'rule-based', 'random', 'momentum', 'mean-reversion-simple', 'grid', 'dca', 'trend-following', 'scalp', 'breakout'];
+    const STRAT_NAMES = {'momentum-breakout': 'Momentum', 'mean-reversion': 'Mean Rev', 'rule-based': 'Rule-Based', 'random': 'Random', 'momentum': 'Momentum', 'mean-reversion-simple': 'Mean Rev', 'grid': 'Grid', 'dca': 'DCA', 'trend-following': 'Trend', 'scalp': 'Scalp', 'breakout': 'Breakout'};
+
+    let portfolioChart = null;
+    let portfolioHistory = [];
+    let peakValue = 500;
+    let troughValue = 500;
+    let refreshTimer;
+
+    document.addEventListener('DOMContentLoaded', () => {
+      initChart();
+      loadStatus();
+      refreshTimer = setInterval(loadStatus, 5000);
+    });
+
+    function initChart() {
+      const ctx = document.getElementById('portfolioChart').getContext('2d');
+      portfolioHistory = [{ time: new Date().toLocaleTimeString(), value: 500 }];
+      for (let i = 1; i < 20; i++) portfolioHistory.push({ time: '', value: 500 });
+      portfolioChart = new Chart(ctx, {
+        type: 'line',
+        data: { labels: portfolioHistory.map(h => h.time), datasets: [{ data: portfolioHistory.map(h => h.value), borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.1)', fill: true, tension: 0.4, pointRadius: 0 }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } }, x: { grid: { display: false }, ticks: { color: '#94a3b8', maxTicksLimit: 6 } } } }
+      });
+    }
+
+    async function loadStatus() {
+      try {
+        const res = await fetch(API + '/api/status');
+        const data = await res.json();
+        if (data.success) updateDashboard(data);
+        document.getElementById('statusDot').className = 'w-2 h-2 rounded-full bg-green-500';
+        document.getElementById('statusText').textContent = 'LIVE';
+      } catch (e) {
+        document.getElementById('statusDot').className = 'w-2 h-2 rounded-full bg-red-500';
+        document.getElementById('statusText').textContent = 'ERROR';
+      }
+    }
+
+    function updateDashboard(data) {
+      const portfolio = data.portfolio;
+      const totalValue = parseFloat(portfolio.totalValue);
+      const totalReturn = parseFloat(portfolio.totalReturn);
+      const balance = parseFloat(portfolio.balance);
+
+      // Token prices
+      TOKENS.forEach(t => {
+        const el = document.getElementById('price-' + t);
+        if (el) el.textContent = '$' + (data.prices[t] > 1 ? data.prices[t].toFixed(2) : data.prices[t].toFixed(4));
+        const sigEl = document.getElementById('sig-' + t);
+        const sig = data.signals[t]?.overall || 'HOLD';
+        if (sigEl) { sigEl.textContent = sig; sigEl.className = sig === 'BUY' ? 'text-xs text-green-400' : sig === 'SELL' ? 'text-xs text-red-400' : 'text-xs text-gray-400'; }
+      });
+
+      // Portfolio chart
+      const now = new Date().toLocaleTimeString();
+      portfolioHistory.push({ time: now, value: totalValue });
+      if (portfolioHistory.length > 50) portfolioHistory.shift();
+      portfolioChart.data.labels = portfolioHistory.map(h => h.time);
+      portfolioChart.data.datasets[0].data = portfolioHistory.map(h => h.value);
+      portfolioChart.data.datasets[0].borderColor = totalReturn >= 0 ? '#10b981' : '#ef4444';
+      portfolioChart.update('none');
+      document.getElementById('currentValue').textContent = '$' + totalValue.toFixed(2);
+      if (totalValue > peakValue) { peakValue = totalValue; document.getElementById('peakValue').textContent = '$' + peakValue.toFixed(2); }
+      if (totalValue < troughValue) { troughValue = totalValue; document.getElementById('troughValue').textContent = '$' + troughValue.toFixed(2); }
+
+      // Trade stats
+      const stats = data.stats;
+      const totalTrades = stats.totalTrades;
+      const winningTrades = stats.winningTrades;
+      const winRate = parseFloat(stats.winRate);
+      document.getElementById('totalTrades').textContent = totalTrades;
+      document.getElementById('winningTrades').textContent = winningTrades;
+      document.getElementById('losingTrades').textContent = totalTrades - winningTrades;
+      document.getElementById('winRateStat').textContent = winRate.toFixed(1) + '%';
+
+      // Extended stats
+      const ext = data.extendedStats || {};
+      document.getElementById('largestWin').textContent = ext.largestWin > 0 ? '+$' + ext.largestWin.toFixed(2) : '--';
+      document.getElementById('largestLoss').textContent = ext.largestLoss < 0 ? '-$' + Math.abs(ext.largestLoss).toFixed(2) : '--';
+      document.getElementById('consecWins').textContent = ext.maxConsecWins || 0;
+
+      // Risk
+      const exposure = ((totalValue - balance) / totalValue * 100).toFixed(1);
+      document.getElementById('exposureDisplay').textContent = exposure + '%';
+      document.getElementById('exposureBar').style.width = exposure + '%';
+      document.getElementById('winRateDisplay').textContent = winRate.toFixed(1) + '%';
+      document.getElementById('winRateBar').style.width = winRate + '%';
+
+      // Strategy Performance
+      const spEl = document.getElementById('strategyPerformance');
+      const sp = data.strategyPerformance;
+      if (sp && sp.length > 0) {
+        let html = '<table class="w-full text-xs text-gray-400" style="table-layout:fixed"><colgroup><col style="width:40%"><col style="width:15%"><col style="width:15%"><col style="width:30%"></colgroup><tr><th class="text-left">Strategy</th><th class="text-right">Trades</th><th class="text-right">Win%</th><th class="text-right">Net PnL</th></tr>';
+        sp.forEach(s => {
+          const netColor = s.net >= 0 ? 'positive' : 'negative';
+          html += `<tr class="table-row"><td class="font-medium">${s.name}</td><td class="text-right">${s.trades}</td><td class="text-right">${s.winRate}%</td><td class="text-right ${netColor}">${s.net >= 0 ? '+' : ''}$${s.net.toFixed(2)}</td></tr>`;
+        });
+        html += '</table>';
+        spEl.innerHTML = html;
+      } else {
+        spEl.innerHTML = '<p class="text-gray-500 text-xs">Execute trades to see strategy analytics</p>';
+      }
+
+      // Open positions
+      const posEl = document.getElementById('openPositions');
+      if (data.positions && data.positions.length > 0) {
+        let html = '<table class="w-full text-xs text-gray-400" style="table-layout:fixed"><colgroup><col style="width:25%"><col style="width:25%"><col style="width:18%"><col style="width:18%"><col style="width:14%"></colgroup><tr><th class="text-left">Token</th><th class="text-right">Amount</th><th class="text-right">Entry</th><th class="text-right">Current</th><th class="text-right">PnL</th></tr>';
+        data.positions.forEach(p => { const pnl = parseFloat(p.pnl); html += '<tr class="table-row"><td>' + p.token + '</td><td class="text-right">' + parseFloat(p.amount).toFixed(4) + '</td><td class="text-right">$' + p.entryPrice + '</td><td class="text-right">$' + p.currentPrice + '</td><td class="text-right ' + (pnl >= 0 ? 'positive' : 'negative') + '">' + (pnl >= 0 ? '+' : '') + '$' + p.pnl + '</td></tr>'; });
+        html += '</table>';
+        posEl.innerHTML = html;
+      } else { posEl.innerHTML = '<p class="text-gray-500 text-xs">No open positions</p>'; }
+
+      // Strategy signals (all strategies x all tokens)
+      let signalsHtml = '';
+      STRATEGIES.forEach(strat => {
+        signalsHtml += '<div class="signal-box"><div class="signal-title">' + (STRAT_NAMES[strat] || strat) + '</div>';
+        TOKENS.forEach(t => {
+          const sig = data.signals[t]?.[strat] || 'HOLD';
+          const colorClass = sig === 'BUY' ? 'text-green-400' : sig === 'SELL' ? 'text-red-400' : 'text-gray-400';
+          signalsHtml += '<div class="signal-item"><span class="text-gray-400">' + t + '</span><span class="font-bold ' + colorClass + '">' + sig + '</span></div>';
+        });
+        signalsHtml += '</div>';
+      });
+      document.getElementById('signalsContainer').innerHTML = signalsHtml;
+
+      // Sentiment
+      const sentiment = data.sentiment || {};
+      TOKENS.forEach(t => {
+        const s = sentiment[t] || { score: 0.3, fearGreedIndex: 50, momentum: 'stable' };
+        document.getElementById('sent-' + t + '-score').textContent = (s.score || 0.3).toFixed(2);
+        document.getElementById('sent-' + t + '-fg').textContent = s.fearGreedIndex || 50;
+        const momEl = document.getElementById('sent-' + t + '-mom');
+        momEl.textContent = s.momentum || 'stable';
+        momEl.className = s.momentum === 'increasing' ? 'text-xs text-green-400' : s.momentum === 'decreasing' ? 'text-xs text-red-400' : 'text-xs text-gray-400';
+      });
+
+      // Auto status
+      if (data.autoTrading.enabled) {
+        document.getElementById('statusText').textContent = 'AUTO ' + data.autoTrading.strategy.toUpperCase();
+      }
+    }
+
+    async function startAuto() {
+      const strategy = document.getElementById('strategySelect').value;
+      await fetch(API + '/api/auto/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ strategy }) });
+      addLog('Auto trading started: ' + strategy);
+      loadStatus();
+    }
+
+    async function stopAuto() {
+      await fetch(API + '/api/auto/stop', { method: 'POST' });
+      addLog('Auto trading stopped');
+      loadStatus();
+    }
+
+    function addLog(msg) {
+      const log = document.getElementById('terminal');
+      const entry = document.createElement('div');
+      entry.className = 'log-entry text-gray-400';
+      entry.innerHTML = '[' + new Date().toLocaleTimeString() + '] ' + msg;
+      log.insertBefore(entry, log.firstChild);
+    }
+  </script>
+</body>
+</html>

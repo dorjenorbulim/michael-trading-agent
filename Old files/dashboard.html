@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trading Agent Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    .gradient-text {
+      background: linear-gradient(to right, #60a5fa, #a78bfa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .card-glow {
+      box-shadow: 0 0 20px rgba(59, 130, 246, 0.1);
+    }
+    .positive { color: #10b981; }
+    .negative { color: #ef4444; }
+    .pulse-dot {
+      animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: .5; }
+    }
+  </style>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
+  <div class="container mx-auto p-6">
+    <!-- Header -->
+    <div class="mb-8">
+      <div class="flex items-center justify-between">
+        <div>
+          <h1 class="text-4xl font-bold gradient-text">Trading Dashboard</h1>
+          <p class="text-gray-400 mt-2 flex items-center gap-2">
+            <span class="w-2 h-2 bg-green-500 rounded-full pulse-dot"></span>
+            Multi-Strategy AI Trading Agent
+            <span class="text-xs bg-yellow-500/20 text-yellow-400 px-2 py-1 rounded ml-2">PAPER TRADING</span>
+          </p>
+        </div>
+        <div class="flex gap-3">
+          <button id="startBtn" onclick="toggleTrading()" class="bg-green-600 hover:bg-green-700 px-6 py-2 rounded-lg font-medium transition">
+            Start Trading
+          </button>
+          <button onclick="runBacktest()" class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg font-medium transition">
+            Run Backtest
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Quick Stats -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div class="bg-gray-900 rounded-xl p-6 card-glow border border-gray-800">
+        <div class="flex justify-between items-start">
+          <div>
+            <p class="text-sm text-gray-400">Total Value</p>
+            <p class="text-2xl font-bold" id="totalValue">$12,547.32</p>
+          </div>
+          <svg class="w-8 h-8 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/>
+          </svg>
+        </div>
+      </div>
+
+      <div class="bg-gray-900 rounded-xl p-6 card-glow border border-gray-800">
+        <div class="flex justify-between items-start">
+          <div>
+            <p class="text-sm text-gray-400">Daily P&L</p>
+            <p class="text-2xl font-bold positive" id="dailyPnL">+$342.15</p>
+            <p class="text-sm positive">+2.8%</p>
+          </div>
+          <svg class="w-8 h-8 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
+          </svg>
+        </div>
+      </div>
+
+      <div class="bg-gray-900 rounded-xl p-6 card-glow border border-gray-800">
+        <div class="flex justify-between items-start">
+          <div>
+            <p class="text-sm text-gray-400">Open Positions</p>
+            <p class="text-2xl font-bold" id="openPositions">4</p>
+          </div>
+          <svg class="w-8 h-8 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+          </svg>
+        </div>
+      </div>
+
+      <div class="bg-gray-900 rounded-xl p-6 card-glow border border-gray-800">
+        <div class="flex justify-between items-start">
+          <div>
+            <p class="text-sm text-gray-400">Risk Level</p>
+            <div class="flex items-center gap-2 mt-1">
+              <div class="w-3 h-3 rounded-full bg-yellow-500"></div>
+              <p class="text-xl font-bold">MEDIUM</p>
+            </div>
+          </div>
+          <svg class="w-8 h-8 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+          </svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- Charts & Tables Row -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      <!-- Portfolio Performance -->
+      <div class="bg-gray-900 rounded-xl p-6 card-glow border border-gray-800">
+        <h3 class="text-lg font-semibold mb-4">Portfolio Performance</h3>
+        <canvas id="performanceChart" height="250"></canvas>
+      </div>
+
+      <!-- Asset Allocation -->
+      <div class="bg-gray-900 rounded-xl p-6 card-glow border border-gray-800">
+        <h3 class="text-lg font-semibold mb-4">Asset Allocation</h3>
+        <canvas id="allocationChart" height="250"></canvas>
+        <div class="flex flex-wrap gap-4 mt-4 justify-center" id="allocationLegend"></div>
+      </div>
+    </div>
+
+    <!-- Strategy Performance -->
+    <div class="bg-gray-900 rounded-xl p-6 card-glow border border-gray-800 mb-6">
+      <h3 class="text-lg font-semibold mb-4">Strategy Performance</h3>
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4" id="strategyCards">
+        <!-- Strategy cards will be inserted here -->
+      </div>
+    </div>
+
+    <!-- Recent Trades -->
+    <div class="bg-gray-900 rounded-xl p-6 card-glow border border-gray-800">
+      <div class="flex justify-between items-center mb-4">
+        <h3 class="text-lg font-semibold">Recent Trades</h3>
+        <div class="flex gap-2">
+          <button onclick="showOpenTrades()" class="text-sm bg-gray-800 hover:bg-gray-700 px-3 py-1 rounded">Open</button>
+          <button onclick="showClosedTrades()" class="text-sm bg-gray-800 hover:bg-gray-700 px-3 py-1 rounded">Closed</button>
+          <button onclick="showAllTrades()" class="text-sm bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded">All</button>
+        </div>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full">
+          <thead>
+            <tr class="border-b border-gray-800">
+              <th class="text-left py-3 px-4 text-gray-400 font-medium">Symbol</th>
+              <th class="text-left py-3 px-4 text-gray-400 font-medium">Side</th>
+              <th class="text-left py-3 px-4 text-gray-400 font-medium">Amount</th>
+              <th class="text-left py-3 px-4 text-gray-400 font-medium">Price</th>
+              <th class="text-left py-3 px-4 text-gray-400 font-medium">P&L</th>
+              <th class="text-left py-3 px-4 text-gray-400 font-medium">Strategy</th>
+              <th class="text-left py-3 px-4 text-gray-400 font-medium">Status</th>
+            </tr>
+          </thead>
+          <tbody id="tradesTable"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Risk Metrics -->
+    <div class="mt-6 bg-gray-900 rounded-xl p-6 card-glow border border-gray-800">
+      <h3 class="text-lg font-semibold mb-4">Risk Metrics</h3>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div>
+          <div class="flex justify-between mb-1">
+            <span class="text-sm text-gray-400">Daily Loss Limit</span>
+            <span class="text-sm">$500</span>
+          </div>
+          <div class="w-full bg-gray-800 rounded-full h-2">
+            <div class="bg-green-500 h-2 rounded-full" style="width: 30%"></div>
+          </div>
+        </div>
+        <div>
+          <div class="flex justify-between mb-1">
+            <span class="text-sm text-gray-400">Max Drawdown</span>
+            <span class="text-sm">10%</span>
+          </div>
+          <div class="w-full bg-gray-800 rounded-full h-2">
+            <div class="bg-yellow-500 h-2 rounded-full" style="width: 52%"></div>
+          </div>
+        </div>
+        <div>
+          <div class="flex justify-between mb-1">
+            <span class="text-sm text-gray-400">Max Exposure</span>
+            <span class="text-sm">80%</span>
+          </div>
+          <div class="w-full bg-gray-800 rounded-full h-2">
+            <div class="bg-blue-500 h-2 rounded-full" style="width: 58%"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Data
+    let isTrading = false;
+    
+    const trades = [
+      { id: '1', symbol: 'SOL', side: 'BUY', amount: 12.5, price: 142.30, pnl: 45.20, strategy: 'LLM', status: 'open' },
+      { id: '2', symbol: 'BONK', side: 'BUY', amount: 2500000, price: 0.0000234, pnl: -12.50, strategy: 'Momentum', status: 'open' },
+      { id: '3', symbol: 'WIF', side: 'SELL', amount: 150, price: 2.45, pnl: 23.40, strategy: 'Mean Reversion', status: 'closed' },
+      { id: '4', symbol: 'PEPE', side: 'BUY', amount: 500000, price: 0.0000012, pnl: 8.90, strategy: 'Rule-Based', status: 'closed' },
+      { id: '5', symbol: 'JUP', side: 'BUY', amount: 85, price: 0.85, pnl: 12.30, strategy: 'LLM', status: 'open' },
+    ];
+
+    const strategies = [
+      { name: 'LLM Strategy', pnl: 1250.45, winRate: 68.5, trades: 42, color: '#60a5fa' },
+      { name: 'Momentum', pnl: 890.20, winRate: 61.2, trades: 38, color: '#10b981' },
+      { name: 'Mean Reversion', pnl: 645.80, winRate: 72.1, trades: 25, color: '#a78bfa' },
+      { name: 'Rule-Based', pnl: 420.15, winRate: 58.9, trades: 31, color: '#f59e0b' },
+    ];
+
+    // Format currency
+    function formatCurrency(value) {
+      return new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: 'USD',
+      }).format(value);
+    }
+
+    // Toggle trading
+    function toggleTrading() {
+      isTrading = !isTrading;
+      const btn = document.getElementById('startBtn');
+      if (isTrading) {
+        btn.textContent = 'Stop Trading';
+        btn.classList.remove('bg-green-600', 'hover:bg-green-700');
+        btn.classList.add('bg-red-600', 'hover:bg-red-700');
+      } else {
+        btn.textContent = 'Start Trading';
+        btn.classList.remove('bg-red-600', 'hover:bg-red-700');
+        btn.classList.add('bg-green-600', 'hover:bg-green-700');
+      }
+    }
+
+    // Run backtest
+    function runBacktest() {
+      alert('Running backtest comparison...\n\nCheck console for results');
+    }
+
+    // Show trades
+    function showOpenTrades() {
+      renderTrades(trades.filter(t => t.status === 'open'));
+    }
+
+    function showClosedTrades() {
+      renderTrades(trades.filter(t => t.status === 'closed'));
+    }
+
+    function showAllTrades() {
+      renderTrades(trades);
+    }
+
+    // Render trades
+    function renderTrades(tradesToShow) {
+      const tbody = document.getElementById('tradesTable');
+      tbody.innerHTML = tradesToShow.map(trade => `
+        <tr class="border-b border-gray-800/50 hover:bg-gray-800/30">
+          <td class="py-3 px-4 font-medium">${trade.symbol}</td>
+          <td class="py-3 px-4">
+            <span class="px-2 py-1 rounded text-xs font-medium ${trade.side === 'BUY' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}">
+              ${trade.side}
+            </span>
+          </td>
+          <td class="py-3 px-4">${trade.amount.toLocaleString()}</td>
+          <td class="py-3 px-4">$${trade.price.toFixed(6)}</td>
+          <td class="py-3 px-4 ${trade.pnl >= 0 ? 'positive' : 'negative'}">
+            ${trade.pnl >= 0 ? '+' : ''}$${trade.pnl.toFixed(2)}
+          </td>
+          <td class="py-3 px-4 text-gray-400">${trade.strategy}</td>
+          <td class="py-3 px-4">
+            <span class="px-2 py-1 rounded text-xs border ${trade.status === 'open' ? 'border-yellow-500/50 text-yellow-400' : 'border-gray-600 text-gray-400'}">
+              ${trade.status}
+            </span>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    // Render strategy cards
+    function renderStrategies() {
+      const container = document.getElementById('strategyCards');
+      container.innerHTML = strategies.map(s => `
+        <div class="bg-gray-800/50 rounded-lg p-4 border border-gray-700">
+          <h4 class="font-semibold mb-2">${s.name}</h4>
+          <div class="space-y-2 text-sm">
+            <div class="flex justify-between">
+              <span class="text-gray-400">P&L</span>
+              <span class="${s.pnl >= 0 ? 'positive' : 'negative'}">${s.pnl >= 0 ? '+' : ''}${formatCurrency(s.pnl)}</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-gray-400">Win Rate</span>
+              <span>${s.winRate}%</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-gray-400">Trades</span>
+              <span>${s.trades}</span>
+            </div>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    // Initialize charts
+    function initCharts() {
+      // Performance chart
+      const perfCtx = document.getElementById('performanceChart').getContext('2d');
+      new Chart(perfCtx, {
+        type: 'line',
+        data: {
+          labels: ['00:00', '04:00', '08:00', '12:00', '16:00', '20:00', '24:00'],
+          datasets: [{
+            label: 'Portfolio Value',
+            data: [10000, 10120, 9980, 10540, 11200, 11890, 12547],
+            borderColor: '#10b981',
+            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+            fill: true,
+            tension: 0.4
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: { grid: { color: '#374151' }, ticks: { color: '#9ca3af' } },
+            x: { grid: { display: false }, ticks: { color: '#9ca3af' } }
+          }
+        }
+      });
+
+      // Allocation chart
+      const allocCtx = document.getElementById('allocationChart').getContext('2d');
+      const allocationData = [
+        { name: 'SOL', value: 35, color: '#10b981' },
+        { name: 'BONK', value: 25, color: '#3b82f6' },
+        { name: 'WIF', value: 20, color: '#a78bfa' },
+        { name: 'Cash', value: 20, color: '#6b7280' },
+      ];
+      
+      new Chart(allocCtx, {
+        type: 'doughnut',
+        data: {
+          labels: allocationData.map(d => d.name),
+          datasets: [{
+            data: allocationData.map(d => d.value),
+            backgroundColor: allocationData.map(d => d.color),
+            borderWidth: 0
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          cutout: '70%'
+        }
+      });
+
+      // Render legend
+      document.getElementById('allocationLegend').innerHTML = allocationData.map(d => `
+        <div class="flex items-center gap-1">
+          <div class="w-3 h-3 rounded-full" style="background-color: ${d.color}"></div>
+          <span class="text-sm text-gray-400">${d.name} (${d.value}%)</span>
+        </div>
+      `).join('');
+    }
+
+    // Initialize
+    document.addEventListener('DOMContentLoaded', () => {
+      renderTrades(trades);
+      renderStrategies();
+      initCharts();
+    });
+  </script>
+</body>
+</html>

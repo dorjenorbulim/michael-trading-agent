@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trading Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { background: #0f172a; color: #e2e8f0; font-family: system-ui, sans-serif; }
+    .card { background: #1e293b; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+    .positive { color: #10b981; }
+    .negative { color: #ef4444; }
+    .btn { background: #3b82f6; color: white; padding: 10px 20px; border-radius: 6px; border: none; cursor: pointer; }
+    .btn:hover { background: #2563eb; }
+    .btn-green { background: #10b981; }
+    .btn-green:hover { background: #059669; }
+    .btn-red { background: #ef4444; }
+    .btn-red:hover { background: #dc2626; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 12px; text-align: left; border-bottom: 1px solid #334155; }
+    th { color: #94a3b8; font-weight: 500; }
+    .chart-container { position: relative; height: 200px; width: 100%; }
+  </style>
+</head>
+<body class="p-6">
+  <div class="max-w-7xl mx-auto">
+    <!-- Header -->
+    <div class="flex justify-between items-center mb-6">
+      <div>
+        <h1 class="text-3xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
+          Trading Dashboard
+        </h1>
+        <p class="text-gray-400 mt-1">Multi-Strategy AI Trading Agent</p>
+      </div>
+      <div class="flex gap-3">
+        <span class="bg-yellow-500/20 text-yellow-400 px-3 py-1 rounded text-sm">PAPER TRADING</span>
+        <button id="tradeBtn" onclick="toggleTrading()" class="btn btn-green">Start Trading</button>
+      </div>
+    </div>
+
+    <!-- Stats Cards -->
+    <div class="grid grid-cols-4 gap-4 mb-6">
+      <div class="card">
+        <p class="text-gray-400 text-sm">Total Value</p>
+        <p class="text-2xl font-bold" id="totalValue">$12,547.32</p>
+      </div>
+      <div class="card">
+        <p class="text-gray-400 text-sm">Daily P&L</p>
+        <p class="text-2xl font-bold positive" id="dailyPnL">+$342.15</p>
+        <p class="text-sm positive">+2.8%</p>
+      </div>
+      <div class="card">
+        <p class="text-gray-400 text-sm">Open Positions</p>
+        <p class="text-2xl font-bold" id="openPos">4</p>
+      </div>
+      <div class="card">
+        <p class="text-gray-400 text-sm">Risk Level</p>
+        <p class="text-2xl font-bold text-yellow-400">MEDIUM</p>
+      </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="grid grid-cols-2 gap-4 mb-6">
+      <div class="card">
+        <h3 class="font-semibold mb-4">Portfolio Performance</h3>
+        <div class="chart-container">
+          <canvas id="perfChart"></canvas>
+        </div>
+      </div>
+      <div class="card">
+        <h3 class="font-semibold mb-4">Strategy Performance</h3>
+        <div class="chart-container">
+          <canvas id="stratChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Strategies -->
+    <div class="card mb-6">
+      <h3 class="font-semibold mb-4">Strategy Allocation</h3>
+      <div class="grid grid-cols-4 gap-4" id="strategies">
+        <!-- Filled by JS -->
+      </div>
+    </div>
+
+    <!-- Trades Table -->
+    <div class="card">
+      <h3 class="font-semibold mb-4">Recent Trades</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Side</th>
+            <th>Amount</th>
+            <th>Price</th>
+            <th>P&L</th>
+            <th>Strategy</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="tradesTable">
+          <!-- Filled by JS -->
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    // Data
+    const trades = [
+      { symbol: 'SOL', side: 'BUY', amount: 12.5, price: 142.30, pnl: 45.20, strategy: 'LLM', status: 'open' },
+      { symbol: 'BONK', side: 'BUY', amount: 2500000, price: 0.0000234, pnl: -12.50, strategy: 'Momentum', status: 'open' },
+      { symbol: 'WIF', side: 'SELL', amount: 150, price: 2.45, pnl: 23.40, strategy: 'Mean Reversion', status: 'closed' },
+      { symbol: 'PEPE', side: 'BUY', amount: 500000, price: 0.0000012, pnl: 8.90, strategy: 'Rule-Based', status: 'closed' },
+    ];
+
+    const strategies = [
+      { name: 'LLM Strategy', pnl: 1250.45, winRate: 68.5, trades: 42 },
+      { name: 'Momentum', pnl: 890.20, winRate: 61.2, trades: 38 },
+      { name: 'Mean Reversion', pnl: 645.80, winRate: 72.1, trades: 25 },
+      { name: 'Rule-Based', pnl: 420.15, winRate: 58.9, trades: 31 },
+    ];
+
+    let trading = false;
+    let perfChart, stratChart;
+
+    function toggleTrading() {
+      trading = !trading;
+      const btn = document.getElementById('tradeBtn');
+      btn.textContent = trading ? 'Stop Trading' : 'Start Trading';
+      btn.className = trading ? 'btn btn-red' : 'btn btn-green';
+    }
+
+    function formatMoney(val) {
+      return '$' + val.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    }
+
+    // Render strategies
+    document.getElementById('strategies').innerHTML = strategies.map(s => `
+      <div class="bg-gray-800 p-4 rounded">
+        <h4 class="font-semibold">${s.name}</h4>
+        <p class="${s.pnl >= 0 ? 'positive' : 'negative'}">${s.pnl >= 0 ? '+' : ''}${formatMoney(s.pnl)}</p>
+        <p class="text-sm text-gray-400">Win: ${s.winRate}% | ${s.trades} trades</p>
+      </div>
+    `).join('');
+
+    // Render trades
+    document.getElementById('tradesTable').innerHTML = trades.map(t => `
+      <tr>
+        <td class="font-semibold">${t.symbol}</td>
+        <td><span class="px-2 py-1 rounded text-xs ${t.side === 'BUY' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}">${t.side}</span></td>
+        <td>${t.amount.toLocaleString()}</td>
+        <td>$${t.price.toFixed(6)}</td>
+        <td class="${t.pnl >= 0 ? 'positive' : 'negative'}">${t.pnl >= 0 ? '+' : ''}$${t.pnl.toFixed(2)}</td>
+        <td class="text-gray-400">${t.strategy}</td>
+        <td><span class="px-2 py-1 rounded text-xs border ${t.status === 'open' ? 'border-yellow-500 text-yellow-400' : 'border-gray-600 text-gray-400'}">${t.status}</span></td>
+      </tr>
+    `).join('');
+
+    // Charts
+    const perfCtx = document.getElementById('perfChart').getContext('2d');
+    perfChart = new Chart(perfCtx, {
+      type: 'line',
+      data: {
+        labels: ['00:00', '04:00', '08:00', '12:00', '16:00', '20:00', '24:00'],
+        datasets: [{
+          label: 'Portfolio Value',
+          data: [10000, 10120, 9980, 10540, 11200, 11890, 12547],
+          borderColor: '#10b981',
+          backgroundColor: 'rgba(16, 185, 129, 0.1)',
+          fill: true,
+          tension: 0.4
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { 
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: function(context) {
+                return '$' + context.parsed.y.toLocaleString();
+              }
+            }
+          }
+        },
+        scales: {
+          y: { 
+            grid: { color: '#334155' }, 
+            ticks: { 
+              color: '#94a3b8',
+              callback: function(value) {
+                return '$' + value.toLocaleString();
+              }
+            },
+            min: 9000,
+            max: 13000
+          },
+          x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
+        }
+      }
+    });
+
+    const stratCtx = document.getElementById('stratChart').getContext('2d');
+    stratChart = new Chart(stratCtx, {
+      type: 'bar',
+      data: {
+        labels: strategies.map(s => s.name.split(' ')[0]),
+        datasets: [{
+          label: 'P&L ($)',
+          data: strategies.map(s => s.pnl),
+          backgroundColor: ['#60a5fa', '#10b981', '#a78bfa', '#f59e0b']
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: { 
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: function(context) {
+                return '$' + context.parsed.y.toLocaleString();
+              }
+            }
+          }
+        },
+        scales: {
+          y: { 
+            grid: { color: '#334155' }, 
+            ticks: { 
+              color: '#94a3b8',
+              callback: function(value) {
+                return '$' + value.toLocaleString();
+              }
+            } 
+          },
+          x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
+        }
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trading Dashboard - Analytics (LIVE)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { background: #0f172a; color: #e2e8f0; font-family: system-ui, sans-serif; }
+    .card { background: #1e293b; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+    .positive { color: #10b981; }
+    .negative { color: #ef4444; }
+    .neutral { color: #94a3b8; }
+    .btn { background: #3b82f6; color: white; padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; }
+    .btn:hover { background: #2563eb; }
+    .btn-green { background: #10b981; }
+    .btn-green:hover { background: #059669; }
+    .btn-red { background: #ef4444; }
+    .chart-container { position: relative; height: 250px; width: 100%; }
+    .metric-card { background: #0f172a; border-radius: 8px; padding: 16px; text-align: center; }
+    .metric-value { font-size: 24px; font-weight: bold; margin-bottom: 4px; }
+    .metric-label { font-size: 12px; color: #94a3b8; text-transform: uppercase; }
+    .stat-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #334155; }
+    .stat-label { color: #94a3b8; }
+    .progress-bar { background: #334155; border-radius: 4px; height: 8px; overflow: hidden; }
+    .progress-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
+    .trade-row { display: flex; justify-content: space-between; padding: 12px; border-bottom: 1px solid #334155; }
+    .trade-buy { border-left: 3px solid #10b981; }
+    .trade-sell { border-left: 3px solid #ef4444; }
+    .strategy-card { background: #1e293b; border-radius: 8px; padding: 12px; margin-bottom: 8px; border-left: 3px solid; }
+    .log-entry { font-family: monospace; font-size: 12px; padding: 4px 0; border-bottom: 1px solid #1e293b; }
+    .log-time { color: #64748b; }
+    #terminal { background: #0a0a0a; border-radius: 8px; padding: 16px; font-family: monospace; font-size: 13px; max-height: 200px; overflow-y: auto; }
+    .tab-btn { background: transparent; border: none; color: #94a3b8; padding: 8px 16px; cursor: pointer; border-bottom: 2px solid transparent; }
+    .tab-btn.active { color: #3b82f6; border-bottom-color: #3b82f6; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+    .status-live { background: #10b981; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+  </style>
+</head>
+<body class="p-6">
+  <div class="max-w-7xl mx-auto">
+    <!-- Header -->
+    <div class="flex justify-between items-center mb-6">
+      <div>
+        <h1 class="text-3xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
+          Trading Analytics Dashboard
+        </h1>
+        <p class="text-gray-400 mt-1">Performance Metrics & Risk Analysis — LIVE Data</p>
+      </div>
+      <div class="flex items-center gap-4">
+        <span id="connectionStatus" class="flex items-center text-sm">
+          <span class="status-dot" id="statusDot" style="background:#10b981"></span>
+          <span id="statusText" class="text-green-400">LIVE</span>
+        </span>
+        <span class="bg-yellow-500/20 text-yellow-400 px-3 py-1 rounded text-sm">PAPER TRADING</span>
+        <span id="autoBadge" class="bg-gray-600 text-white px-3 py-1 rounded text-sm">MANUAL</span>
+      </div>
+    </div>
+
+    <!-- Live Prices Bar -->
+    <div class="card mb-6">
+      <div class="flex justify-between items-center">
+        <div class="flex gap-8">
+          <div>
+            <span class="text-yellow-400 font-bold text-lg">BTC</span>
+            <span id="btc-price" class="ml-2 text-xl font-bold">$--</span>
+            <span id="btc-change" class="ml-2 text-sm">--</span>
+          </div>
+          <div>
+            <span class="text-purple-400 font-bold text-lg">ETH</span>
+            <span id="eth-price" class="ml-2 text-xl font-bold">$--</span>
+            <span id="eth-change" class="ml-2 text-sm">--</span>
+          </div>
+          <div>
+            <span class="text-green-400 font-bold text-lg">SOL</span>
+            <span id="sol-price" class="ml-2 text-xl font-bold">$--</span>
+            <span id="sol-change" class="ml-2 text-sm">--</span>
+          </div>
+        </div>
+        <div class="flex items-center gap-4">
+          <div class="text-right">
+            <div class="text-sm text-gray-400">Signal</div>
+            <div id="signals" class="flex gap-2 justify-end">
+              <span class="px-2 py-1 rounded text-xs bg-gray-700">BTC: --</span>
+              <span class="px-2 py-1 rounded text-xs bg-gray-700">ETH: --</span>
+              <span class="px-2 py-1 rounded text-xs bg-gray-700">SOL: --</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Control Panel -->
+    <div class="card mb-6">
+      <div class="flex justify-between items-center">
+        <div>
+          <h3 class="font-semibold mb-2">🤖 Auto-Trading Controls</h3>
+          <p class="text-sm text-gray-400">Let the bot trade for you automatically</p>
+        </div>
+        <div class="flex gap-3 items-center">
+          <select id="strategySelect" class="bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm">
+            <option value="mixed">Mixed (Momentum + Mean Reversion)</option>
+            <option value="momentum">Momentum (Trend Following)</option>
+            <option value="mean_reversion">Mean Reversion (Buy Low Sell High)</option>
+          </select>
+          <button onclick="startAutoTrading()" id="autoStartBtn" class="btn btn-green">▶ Start Auto</button>
+          <button onclick="stopAutoTrading()" id="autoStopBtn" class="btn btn-red" disabled>⏹ Stop Auto</button>
+          <button onclick="resetPortfolio()" class="btn bg-gray-600">↺ Reset</button>
+          <button onclick="exportData()" class="btn bg-purple-600">📊 Export</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Key Performance Metrics -->
+    <div class="card mb-6">
+      <h3 class="font-semibold mb-4">Performance Metrics</h3>
+      <div class="grid grid-cols-6 gap-4">
+        <div class="metric-card">
+          <div class="metric-value" id="totalReturn">--</div>
+          <div class="metric-label">Total Return</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value" id="sharpeRatio">--</div>
+          <div class="metric-label">Sharpe Ratio</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value" id="sortinoRatio">--</div>
+          <div class="metric-label">Sortino Ratio</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value" id="maxDrawdown">--</div>
+          <div class="metric-label">Max Drawdown</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value" id="profitFactor">--</div>
+          <div class="metric-label">Profit Factor</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value" id="expectancy">--</div>
+          <div class="metric-label">Expectancy</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Portfolio & Risk Overview -->
+    <div class="grid grid-cols-3 gap-4 mb-6">
+      <div class="card">
+        <h3 class="font-semibold mb-4">Portfolio Value</h3>
+        <div class="chart-container">
+          <canvas id="portfolioChart"></canvas>
+        </div>
+        <div class="mt-4">
+          <div class="stat-row">
+            <span class="stat-label">Current</span>
+            <span class="text-xl font-bold" id="currentValue">$500.00</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">Starting</span>
+            <span>$500.00</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">Peak</span>
+            <span class="positive" id="peakValue">$500.00</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">Trough</span>
+            <span class="negative" id="troughValue">$500.00</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 class="font-semibold mb-4">Risk Analysis</h3>
+        <div class="space-y-4">
+          <div>
+            <div class="flex justify-between mb-1">
+              <span class="text-sm text-gray-400">Win Rate</span>
+              <span id="winRateDisplay">0%</span>
+            </div>
+            <div class="progress-bar">
+              <div class="progress-fill bg-green-500" id="winRateBar" style="width: 0%"></div>
+            </div>
+          </div>
+          <div>
+            <div class="flex justify-between mb-1">
+              <span class="text-sm text-gray-400">Avg Win / Avg Loss</span>
+              <span id="winLossRatio">--</span>
+            </div>
+            <div class="progress-bar">
+              <div class="progress-fill bg-blue-500" id="winLossBar" style="width: 50%"></div>
+            </div>
+          </div>
+          <div>
+            <div class="flex justify-between mb-1">
+              <span class="text-sm text-gray-400">Exposure</span>
+              <span id="exposureDisplay">0%</span>
+            </div>
+            <div class="progress-bar">
+              <div class="progress-fill bg-yellow-500" id="exposureBar" style="width: 0%"></div>
+            </div>
+          </div>
+          <div>
+            <div class="flex justify-between mb-1">
+              <span class="text-sm text-gray-400">Daily Loss Limit</span>
+              <span id="dailyLossDisplay">$0 / $500</span>
+            </div>
+            <div class="progress-bar">
+              <div class="progress-fill bg-red-500" id="dailyLossBar" style="width: 0%"></div>
+            </div>
+          </div>
+        </div>
+        <div class="mt-4 pt-4 border-t border-gray-700">
+          <div class="stat-row">
+            <span class="stat-label">Volatility (Annualized)</span>
+            <span id="volatility">--</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">Calmar Ratio</span>
+            <span id="calmarRatio">--</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 class="font-semibold mb-4">Trade Statistics</h3>
+        <div class="space-y-3">
+          <div class="stat-row">
+            <span class="stat-label">Total Trades</span>
+            <span id="totalTrades">0</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">Winning Trades</span>
+            <span class="positive" id="winningTrades">0</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">Losing Trades</span>
+            <span class="negative" id="losingTrades">0</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">Avg Trade Duration</span>
+            <span id="avgDuration">--</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">Largest Win</span>
+            <span class="positive" id="largestWin">--</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">Largest Loss</span>
+            <span class="negative" id="largestLoss">--</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">Consecutive Wins</span>
+            <span class="positive" id="consecWins">0</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">Consecutive Losses</span>
+            <span class="negative" id="consecLosses">0</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Strategy Performance & Rolling Performance -->
+    <div class="grid grid-cols-2 gap-4 mb-6">
+      <div class="card">
+        <h3 class="font-semibold mb-4">Strategy Performance</h3>
+        <div id="strategyPerformance">
+          <p class="text-gray-500 text-center py-8">Execute trades to see strategy analytics</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 class="font-semibold mb-4">Rolling Performance (20 Updates)</h3>
+        <div class="chart-container">
+          <canvas id="rollingChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Recent Trades & Logs -->
+    <div class="grid grid-cols-2 gap-4 mb-6">
+      <div class="card">
+        <h3 class="font-semibold mb-4">Open Positions & Recent Trades</h3>
+        <div id="recentTrades" class="max-h-64 overflow-y-auto">
+          <p class="text-gray-500 text-center py-8">No trades yet</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 class="font-semibold mb-4">Activity Log</h3>
+        <div id="terminal">
+          <div class="text-gray-500">System ready. Click "Start Auto" to begin autonomous trading.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ============ CONFIGURATION ============
+    const API_BASE = 'http://localhost:3002';
+    const REFRESH_INTERVAL = 5000;
+    const STARTING_BALANCE = 500;
+
+    const strategies = [
+      { name: 'Momentum', id: 'momentum', color: '#3b82f6' },
+      { name: 'Mean Reversion', id: 'mean_reversion', color: '#10b981' },
+      { name: 'Mixed', id: 'mixed', color: '#8b5cf6' },
+    ];
+
+    // ============ STATE ============
+    let portfolioChart = null;
+    let rollingChart = null;
+    let portfolioHistory = [];
+    let dailyReturns = [];
+    let lastPortfolioValue = STARTING_BALANCE;
+    let peakValue = STARTING_BALANCE;
+    let troughValue = STARTING_BALANCE;
+    let refreshTimer = null;
+    let allTrades = [];
+
+    // ============ INITIALIZATION ============
+    document.addEventListener('DOMContentLoaded', () => {
+      initCharts();
+      loadStatus();
+      refreshTimer = setInterval(loadStatus, REFRESH_INTERVAL);
+      addLog('Dashboard connected to trading API', 'info');
+    });
+
+    function initCharts() {
+      // Portfolio Chart
+      const portfolioCtx = document.getElementById('portfolioChart').getContext('2d');
+      const now = new Date();
+      for (let i = 20; i >= 0; i--) {
+        portfolioHistory.push({
+          time: new Date(now - i * 5000).toLocaleTimeString('en-US', { hour12: false }),
+          value: STARTING_BALANCE
+        });
+      }
+      
+      portfolioChart = new Chart(portfolioCtx, {
+        type: 'line',
+        data: {
+          labels: portfolioHistory.map(h => h.time),
+          datasets: [{
+            label: 'Portfolio',
+            data: portfolioHistory.map(h => h.value),
+            borderColor: '#3b82f6',
+            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+            fill: true,
+            tension: 0.4,
+            pointRadius: 0
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
+            x: { grid: { display: false }, ticks: { color: '#94a3b8', maxTicksLimit: 6 } }
+          }
+        }
+      });
+
+      // Rolling Chart
+      const rollingCtx = document.getElementById('rollingChart').getContext('2d');
+      rollingChart = new Chart(rollingCtx, {
+        type: 'bar',
+        data: {
+          labels: Array(20).fill(0).map((_, i) => i + 1),
+          datasets: [{
+            label: 'Return %',
+            data: Array(20).fill(0),
+            backgroundColor: '#3b82f6'
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: { 
+              grid: { color: '#334155' }, 
+              ticks: { color: '#94a3b8', callback: v => v + '%' } 
+            },
+            x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
+          }
+        }
+      });
+    }
+
+    // ============ API FUNCTIONS ============
+    async function loadStatus() {
+      try {
+        const res = await fetch(`${API_BASE}/api/status`);
+        const data = await res.json();
+        
+        if (data.success) {
+          updateDashboard(data);
+          document.getElementById('statusDot').style.background = '#10b981';
+          document.getElementById('statusText').textContent = 'LIVE';
+        }
+      } catch (e) {
+        document.getElementById('statusDot').style.background = '#ef4444';
+        document.getElementById('statusText').textContent = 'DISCONNECTED';
+        document.getElementById('statusText').className = 'text-red-400';
+      }
+    }
+
+    function updateDashboard(data) {
+      const portfolio = data.portfolio;
+      const stats = data.stats;
+      const totalValue = parseFloat(portfolio.totalValue);
+      const totalReturn = parseFloat(portfolio.totalReturn);
+      const balance = parseFloat(portfolio.balance);
+      const positions = data.positions || [];
+      const trades = data.trades || [];
+      
+      // Track history
+      if (totalValue !== lastPortfolioValue) {
+        const now = new Date().toLocaleTimeString();
+        portfolioHistory.push({ time: now, value: totalValue });
+        if (portfolioHistory.length > 100) portfolioHistory.shift();
+        
+        // Track returns for rolling chart
+        if (lastPortfolioValue > 0 && lastPortfolioValue !== STARTING_BALANCE) {
+          const ret = ((totalValue - lastPortfolioValue) / lastPortfolioValue) * 100;
+          dailyReturns.push(ret);
+          if (dailyReturns.length > 20) dailyReturns.shift();
+        }
+        lastPortfolioValue = totalValue;
+        
+        // Track peak/trough
+        if (totalValue > peakValue) peakValue = totalValue;
+        if (totalValue < troughValue) troughValue = totalValue;
+      }
+      
+      // Update portfolio chart
+      portfolioChart.data.labels = portfolioHistory.map(h => h.time);
+      portfolioChart.data.datasets[0].data = portfolioHistory.map(h => h.value);
+      portfolioChart.data.datasets[0].borderColor = totalReturn >= 0 ? '#10b981' : '#ef4444';
+      portfolioChart.update('none');
+      
+      // Update rolling chart
+      if (dailyReturns.length > 0) {
+        const padded = [...Array(20 - dailyReturns.length).fill(0), ...dailyReturns.slice(-20)];
+        rollingChart.data.datasets[0].data = padded;
+        rollingChart.data.datasets[0].backgroundColor = padded.map(r => r >= 0 ? '#10b981' : '#ef4444');
+        rollingChart.update('none');
+      }
+      
+      // Exposure
+      const exposure = totalValue > 0 ? ((totalValue - balance) / totalValue * 100).toFixed(1) : 0;
+      document.getElementById('exposureDisplay').textContent = exposure + '%';
+      document.getElementById('exposureBar').style.width = exposure + '%';
+      
+      // Prices
+      document.getElementById('btc-price').textContent = '$' + data.prices.BTC.toLocaleString();
+      document.getElementById('eth-price').textContent = '$' + data.prices.ETH.toLocaleString();
+      document.getElementById('sol-price').textContent = '$' + data.prices.SOL.toFixed(2);
+      
+      // Signals
+      const signals = data.signals || {};
+      document.getElementById('signals').innerHTML = 
+        `<span class="px-2 py-1 rounded text-xs ${signals.BTC === 'BUY' ? 'bg-green-600' : signals.BTC === 'SELL' ? 'bg-red-600' : 'bg-gray-700'}">BTC: ${signals.BTC || '--'}</span>` +
+        `<span class="px-2 py-1 rounded text-xs ${signals.ETH === 'BUY' ? 'bg-green-600' : signals.ETH === 'SELL' ? 'bg-red-600' : 'bg-gray-700'}">ETH: ${signals.ETH || '--'}</span>` +
+        `<span class="px-2 py-1 rounded text-xs ${signals.SOL === 'BUY' ? 'bg-green-600' : signals.SOL === 'SELL' ? 'bg-red-600' : 'bg-gray-700'}">SOL: ${signals.SOL || '--'}</span>`;
+      
+      // Portfolio values
+      document.getElementById('currentValue').textContent = '$' + totalValue.toFixed(2);
+      document.getElementById('peakValue').textContent = '$' + peakValue.toFixed(2);
+      document.getElementById('troughValue').textContent = '$' + troughValue.toFixed(2);
+      
+      // Performance metrics
+      document.getElementById('totalReturn').textContent = (totalReturn >= 0 ? '+' : '') + totalReturn + '%';
+      document.getElementById('totalReturn').className = 'metric-value ' + (totalReturn >= 0 ? 'positive' : 'negative');
+      
+      // Trade stats
+      const totalTrades = parseInt(stats.totalTrades);
+      const winningTrades = parseInt(stats.winningTrades);
+      const losingTrades = totalTrades - winningTrades;
+      const winRate = parseFloat(stats.winRate);
+      
+      document.getElementById('totalTrades').textContent = totalTrades;
+      document.getElementById('winningTrades').textContent = winningTrades;
+      document.getElementById('losingTrades').textContent = losingTrades;
+      document.getElementById('winRateDisplay').textContent = winRate.toFixed(1) + '%';
+      document.getElementById('winRateBar').style.width = winRate + '%';
+      
+      // Calculate analytics from trades
+      calculateAnalytics(trades, totalValue);
+      
+      // Update positions & trades
+      updatePositionsAndTrades(positions, trades);
+      
+      // Update strategy performance
+      updateStrategyPerformance(trades);
+      
+      // Update auto-trading status
+      const autoTrading = data.autoTrading || {};
+      if (autoTrading.enabled) {
+        document.getElementById('autoStartBtn').disabled = true;
+        document.getElementById('autoStopBtn').disabled = false;
+        document.getElementById('autoBadge').textContent = 'AUTO ' + (autoTrading.strategy || 'ON').toUpperCase();
+        document.getElementById('autoBadge').className = 'bg-green-600 text-white px-3 py-1 rounded text-sm';
+      } else {
+        document.getElementById('autoStartBtn').disabled = false;
+        document.getElementById('autoStopBtn').disabled = true;
+        document.getElementById('autoBadge').textContent = 'MANUAL';
+        document.getElementById('autoBadge').className = 'bg-gray-600 text-white px-3 py-1 rounded text-sm';
+      }
+    }
+
+    function calculateAnalytics(trades, currentValue) {
+      if (!trades || trades.length === 0) {
+        ['sharpeRatio', 'sortinoRatio', 'maxDrawdown', 'profitFactor', 'expectancy', 'volatility', 'calmarRatio'].forEach(id => {
+          document.getElementById(id).textContent = '--';
+        });
+        return;
+      }
+      
+      const wins = trades.filter(t => t.pnl > 0);
+      const losses = trades.filter(t => t.pnl <= 0);
+      
+      // Profit factor
+      const grossProfit = wins.reduce((a, b) => a + Math.max(0, b.pnl || 0), 0);
+      const grossLoss = Math.abs(losses.reduce((a, b) => a + Math.min(0, b.pnl || 0), 0));
+      const profitFactor = grossLoss > 0 ? (grossProfit / grossLoss).toFixed(2) : grossProfit > 0 ? '∞' : '--';
+      document.getElementById('profitFactor').textContent = profitFactor;
+      document.getElementById('profitFactor').className = 'metric-value ' + (grossProfit >= grossLoss ? 'positive' : 'negative');
+      
+      // Expectancy
+      const totalPnl = trades.reduce((a, b) => a + (b.pnl || 0), 0);
+      const expectancy = trades.length > 0 ? (totalPnl / trades.length).toFixed(2) : 0;
+      document.getElementById('expectancy').textContent = '$' + expectancy;
+      document.getElementById('expectancy').className = 'metric-value ' + (totalPnl >= 0 ? 'positive' : 'negative');
+      
+      // Max drawdown
+      let maxDrawdown = 0;
+      let peak = STARTING_BALANCE;
+      portfolioHistory.forEach(h => {
+        if (h.value > peak) peak = h.value;
+        const dd = (peak - h.value) / peak * 100;
+        if (dd > maxDrawdown) maxDrawdown = dd;
+      });
+      document.getElementById('maxDrawdown').textContent = '-' + maxDrawdown.toFixed(2) + '%';
+      document.getElementById('maxDrawdown').className = 'metric-value negative';
+      
+      // Sharpe & Sortino (simplified)
+      const returns = dailyReturns.length > 1 ? dailyReturns : [0];
+      const avgReturn = returns.reduce((a, b) => a + b, 0) / returns.length;
+      const stdDev = Math.sqrt(returns.reduce((sq, n) => sq + Math.pow(n - avgReturn, 2), 0) / Math.max(returns.length - 1, 1)) || 1;
+      const downsideDev = Math.sqrt(returns.filter(r => r < 0).reduce((sq, n) => sq + Math.pow(n, 2), 0) / Math.max(returns.filter(r => r < 0).length, 1)) || 1;
+      
+      const sharpe = stdDev > 0 ? (avgReturn / stdDev * Math.sqrt(365)).toFixed(2) : '--';
+      const sortino = downsideDev > 0 ? (avgReturn / downsideDev * Math.sqrt(365)).toFixed(2) : '--';
+      document.getElementById('sharpeRatio').textContent = sharpe;
+      document.getElementById('sortinoRatio').textContent = sortino;
+      
+      // Volatility
+      document.getElementById('volatility').textContent = (stdDev * Math.sqrt(365)).toFixed(1) + '%';
+      
+      // Calmar
+      const maxDrawdownPercent = maxDrawdown / 100;
+      const calmar = maxDrawdownPercent > 0 ? (avgReturn * 365 / maxDrawdownPercent).toFixed(2) : '--';
+      document.getElementById('calmarRatio').textContent = calmar;
+      
+      // Largest win/loss
+      const sortedByPnL = [...trades].sort((a, b) => (b.pnl || 0) - (a.pnl || 0));
+      document.getElementById('largestWin').textContent = sortedByPnL.length > 0 && (sortedByPnL[0].pnl || 0) > 0 ? '$' + sortedByPnL[0].pnl.toFixed(2) : '--';
+      document.getElementById('largestLoss').textContent = sortedByPnL.length > 0 ? '$' + (sortedByPnL[sortedByPnL.length - 1].pnl || 0).toFixed(2) : '--';
+      
+      // Win/Loss ratio
+      const avgWin = wins.length > 0 ? wins.reduce((a, b) => a + (b.pnl || 0), 0) / wins.length : 0;
+      const avgLoss = losses.length > 0 ? Math.abs(losses.reduce((a, b) => a + (b.pnl || 0), 0) / losses.length) : 0;
+      const winLossRatio = avgLoss > 0 ? (avgWin / avgLoss).toFixed(2) : '--';
+      document.getElementById('winLossRatio').textContent = winLossRatio;
+    }
+
+    function updatePositionsAndTrades(positions, trades) {
+      const el = document.getElementById('recentTrades');
+      let html = '';
+      
+      // Open positions
+      if (positions && positions.length > 0) {
+        html += '<div class="text-sm text-gray-400 mb-2">Open Positions</div>';
+        positions.forEach(pos => {
+          const pnl = parseFloat(pos.pnl);
+          html += `
+            <div class="trade-row trade-buy">
+              <div>
+                <span class="font-bold">${pos.token}</span>
+                <span class="text-gray-400 ml-2">${parseFloat(pos.amount).toFixed(6)}</span>
+              </div>
+              <div class="text-right">
+                <div class="${pnl >= 0 ? 'positive' : 'negative'}">${pnl >= 0 ? '+' : ''}$${pos.pnl}</div>
+                <div class="text-xs text-gray-500">${pos.pnlPercent}%</div>
+              </div>
+            </div>
+          `;
+        });
+      }
+      
+      // Recent trades
+      if (trades && trades.length > 0) {
+        html += '<div class="text-sm text-gray-400 mt-4 mb-2">Recent Trades</div>';
+        trades.slice(0, 10).forEach(trade => {
+          const isBuy = trade.type === 'BUY';
+          const pnl = trade.pnl || 0;
+          html += `
+            <div class="trade-row ${isBuy ? 'trade-buy' : 'trade-sell'}">
+              <div>
+                <span class="font-bold ${isBuy ? 'text-green-400' : 'text-red-400'}">${trade.type}</span>
+                <span class="ml-2">${trade.token}</span>
+              </div>
+              <div class="text-right">
+                <div>$${parseFloat(trade.price).toLocaleString()}</div>
+                <div class="text-xs text-gray-500">${parseFloat(trade.quantity).toFixed(6)}</div>
+              </div>
+            </div>
+          `;
+        });
+      }
+      
+      if (!html) {
+        html = '<p class="text-gray-500 text-center py-8">No trades yet</p>';
+      }
+      
+      el.innerHTML = html;
+    }
+
+    function updateStrategyPerformance(trades) {
+      const stratStats = {};
+      strategies.forEach(s => stratStats[s.id] = { trades: 0, wins: 0, pnl: 0 });
+      
+      trades.forEach(t => {
+        const stratId = t.strategy || 'mixed';
+        if (stratStats[stratId]) {
+          stratStats[stratId].trades++;
+          stratStats[stratId].pnl += t.pnl || 0;
+          if ((t.pnl || 0) > 0) stratStats[stratId].wins++;
+        }
+      });
+      
+      let html = '';
+      strategies.forEach(strat => {
+        const stats = stratStats[strat.id];
+        const winRate = stats.trades > 0 ? (stats.wins / stats.trades * 100).toFixed(0) : 0;
+        const pnlClass = stats.pnl >= 0 ? 'positive' : 'negative';
+        
+        html += `
+          <div class="strategy-card" style="border-left-color: ${strat.color}">
+            <div class="flex justify-between items-center mb-2">
+              <span style="color: ${strat.color}">${strat.name}</span>
+              <span class="${pnlClass}">${stats.pnl >= 0 ? '+' : ''}$${stats.pnl.toFixed(2)}</span>
+            </div>
+            <div class="flex justify-between text-sm text-gray-400">
+              <span>${stats.trades} trades | ${winRate}% win</span>
+              <span>${stats.trades > 0 ? (stats.pnl/stats.trades).toFixed(2) : 0} avg</span>
+            </div>
+          </div>
+        `;
+      });
+      
+      document.getElementById('strategyPerformance').innerHTML = html || '<p class="text-gray-500 text-center py-8">No trades yet</p>';
+    }
+
+    // ============ AUTO TRADING ============
+    async function startAutoTrading() {
+      const strategy = document.getElementById('strategySelect').value;
+      try {
+        const res = await fetch(`${API_BASE}/api/auto/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ strategy })
+        });
+        const data = await res.json();
+        if (data.success) {
+          addLog(`🤖 Auto-trading started: ${strategy}`, 'info');
+        }
+      } catch (e) {
+        addLog('Auto-start error: ' + e.message, 'error');
+      }
+    }
+
+    async function stopAutoTrading() {
+      try {
+        const res = await fetch(`${API_BASE}/api/auto/stop`, { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          addLog('🤖 Auto-trading stopped', 'info');
+        }
+      } catch (e) {
+        addLog('Auto-stop error: ' + e.message, 'error');
+      }
+    }
+
+    async function resetPortfolio() {
+      if (!confirm('Reset portfolio to $500? This will close all positions.')) return;
+      try {
+        const res = await fetch(`${API_BASE}/api/reset`, { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          addLog('Portfolio reset to $500', 'info');
+          portfolioHistory = [];
+          dailyReturns = [];
+          lastPortfolioValue = STARTING_BALANCE;
+          peakValue = STARTING_BALANCE;
+          troughValue = STARTING_BALANCE;
+        }
+      } catch (e) {
+        addLog('Reset error: ' + e.message, 'error');
+      }
+    }
+
+    function exportData() {
+      fetch(`${API_BASE}/api/status`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.trades && data.trades.length > 0) {
+            const csv = 'Date,Type,Token,Quantity,Price,Value,PnL,Strategy\n' + 
+              data.trades.map(t => `${t.date || ''},${t.type},${t.token},${t.quantity},${t.price},${t.value || ''},${t.pnl || 0},${t.strategy || ''}`).join('\n');
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'trades_' + new Date().toISOString().split('T')[0] + '.csv';
+            a.click();
+            addLog('CSV exported', 'info');
+          } else {
+            addLog('No trades to export', 'info');
+          }
+        });
+    }
+
+    function addLog(message, type = 'info') {
+      const log = document.getElementById('terminal');
+      const time = new Date().toLocaleTimeString();
+      const colorClass = type === 'trade' ? 'text-green-400' : type === 'error' ? 'text-red-400' : 'text-gray-400';
+      
+      const entry = document.createElement('div');
+      entry.className = 'log-entry ' + colorClass;
+      entry.innerHTML = `<span class="log-time">[${time}]</span> ${message}`;
+      log.insertBefore(entry, log.firstChild);
+      
+      while (log.children.length > 50) {
+        log.removeChild(log.lastChild);
+      }
+    }
+  </script>
+</body>
+</html>

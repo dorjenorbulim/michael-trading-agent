@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trading Dashboard - LIVE</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { background: #0f172a; color: #e2e8f0; font-family: system-ui, sans-serif; }
+    .card { background: #1e293b; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+    .positive { color: #10b981; }
+    .negative { color: #ef4444; }
+    .btn { background: #3b82f6; color: white; padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; }
+    .btn:hover { background: #2563eb; }
+    .btn.active { background: #10b981; }
+    .chart-container { position: relative; height: 300px; width: 100%; }
+    .loading { animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    .stat-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #334155; }
+    .stat-label { color: #94a3b8; }
+    .connection-status { display: inline-flex; align-items: center; gap: 8px; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .status-connected { background: #10b981; }
+    .status-disconnected { background: #ef4444; }
+    .trade-row { display: flex; justify-content: space-between; padding: 12px; border-bottom: 1px solid #334155; }
+    .trade-buy { border-left: 3px solid #10b981; }
+    .trade-sell { border-left: 3px solid #ef4444; }
+    .last-updated { font-size: 12px; color: #64748b; margin-top: 8px; }
+  </style>
+</head>
+<body class="p-6">
+  <div class="max-w-7xl mx-auto">
+    <!-- Header -->
+    <div class="flex justify-between items-center mb-6">
+      <div>
+        <h1 class="text-3xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
+          Trading Dashboard
+        </h1>
+        <p class="text-gray-400 mt-1">Live Connection to ElizaOS Agent</p>
+      </div>
+      <div class="flex items-center gap-4">
+        <div class="connection-status">
+          <span id="statusDot" class="status-dot status-disconnected"></span>
+          <span id="connectionStatus">Disconnected</span>
+        </div>
+        <span class="bg-yellow-500/20 text-yellow-400 px-3 py-1 rounded text-sm">PAPER TRADING</span>
+      </div>
+    </div>
+
+    <!-- Connection Panel -->
+    <div class="card mb-6">
+      <h3 class="font-semibold mb-4">Agent Connection</h3>
+      <div class="flex gap-4 mb-4">
+        <input type="text" id="agentUrl" value="http://localhost:3000" class="bg-gray-800 border border-gray-700 rounded px-4 py-2 flex-1 text-white" placeholder="http://localhost:3000">
+        <button onclick="connectToAgent()" class="btn">Connect</button>
+        <button onclick="disconnectAgent()" class="btn bg-gray-600">Disconnect</button>
+      </div>
+      <p class="text-sm text-gray-400">Enter your ElizaOS agent URL and click Connect to see live data</p>
+    </div>
+
+    <!-- Stats Grid -->
+    <div class="grid grid-cols-4 gap-4 mb-6">
+      <div class="card">
+        <p class="text-gray-400 text-sm">Portfolio Value</p>
+        <p class="text-2xl font-bold loading" id="portfolioValue">--</p>
+        <p class="text-sm" id="portfolioChange">--</p>
+      </div>
+      <div class="card">
+        <p class="text-gray-400 text-sm">Daily P&L</p>
+        <p class="text-2xl font-bold loading" id="dailyPnl">--</p>
+        <p class="text-sm text-gray-400" id="dailyPnlPercent">--</p>
+      </div>
+      <div class="card">
+        <p class="text-gray-400 text-sm">Open Positions</p>
+        <p class="text-2xl font-bold loading" id="openPositions">--</p>
+        <p class="text-sm text-gray-400">Active trades</p>
+      </div>
+      <div class="card">
+        <p class="text-gray-400 text-sm">Win Rate</p>
+        <p class="text-2xl font-bold loading" id="winRate">--</p>
+        <p class="text-sm text-gray-400" id="totalTrades">--</p>
+      </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="card mb-6">
+      <div class="flex justify-between items-center mb-4">
+        <h3 class="font-semibold">Portfolio Performance</h3>
+        <div class="flex gap-2">
+          <button onclick="changeTimeRange('1H')" id="btn-1H" class="btn text-sm">1H</button>
+          <button onclick="changeTimeRange('1D')" id="btn-1D" class="btn active text-sm">1D</button>
+          <button onclick="changeTimeRange('1W')" id="btn-1W" class="btn text-sm">1W</button>
+        </div>
+      </div>
+      <div class="chart-container">
+        <canvas id="performanceChart"></canvas>
+      </div>
+      <p class="last-updated" id="chartUpdated">Last updated: --</p>
+    </div>
+
+    <!-- Live Trades -->
+    <div class="grid grid-cols-2 gap-4 mb-6">
+      <div class="card">
+        <h3 class="font-semibold mb-4">Recent Trades</h3>
+        <div id="recentTrades" class="max-h-64 overflow-y-auto">
+          <p class="text-gray-500 text-center py-8">Connect to see live trades</p>
+        </div>
+        <p class="last-updated" id="tradesUpdated">Last updated: --</p>
+      </div>
+      <div class="card">
+        <h3 class="font-semibold mb-4">Active Strategies</h3>
+        <div id="activeStrategies">
+          <p class="text-gray-500 text-center py-8">Connect to see strategy status</p>
+        </div>
+        <p class="last-updated" id="strategiesUpdated">Last updated: --</p>
+      </div>
+    </div>
+
+    <!-- Risk Dashboard -->
+    <div class="card mb-6">
+      <h3 class="font-semibold mb-4">Risk Metrics</h3>
+      <div class="grid grid-cols-4 gap-4">
+        <div>
+          <p class="text-gray-400 text-sm">Risk Level</p>
+          <p class="text-xl font-bold loading" id="riskLevel">--</p>
+        </div>
+        <div>
+          <p class="text-gray-400 text-sm">Daily Loss</p>
+          <p class="text-xl font-bold loading" id="dailyLoss">--</p>
+        </div>
+        <div>
+          <p class="text-gray-400 text-sm">Max Drawdown</p>
+          <p class="text-xl font-bold loading" id="maxDrawdown">--</p>
+        </div>
+        <div>
+          <p class="text-gray-400 text-sm">Circuit Breaker</p>
+          <p class="text-xl font-bold loading" id="circuitBreaker">--</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let performanceChart = null;
+    let updateInterval = null;
+    let agentUrl = 'http://localhost:3000';
+    let isConnected = false;
+
+    // Mock data for demo (replace with actual API calls)
+    const mockPortfolioData = {
+      '1H': {
+        labels: ['10:00', '10:15', '10:30', '10:45', '11:00', '11:15', '11:30', '11:45', '12:00'],
+        values: [12500, 12512, 12495, 12520, 12535, 12528, 12540, 12547, 12547],
+        startValue: 12500
+      },
+      '1D': {
+        labels: ['00:00', '03:00', '06:00', '09:00', '12:00', '15:00', '18:00', '21:00', '24:00'],
+        values: [12205, 12120, 11980, 12540, 12200, 11890, 12150, 12400, 12547],
+        startValue: 12205
+      },
+      '1W': {
+        labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+        values: [11000, 11250, 11500, 11400, 11800, 12100, 12547],
+        startValue: 11000
+      }
+    };
+
+    function formatCurrency(value) {
+      return '$' + value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function calculateYRange(values) {
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const range = max - min;
+      const padding = range * 0.1;
+      return { min: Math.floor(min - padding), max: Math.ceil(max + padding) };
+    }
+
+    function renderChart(timeRange) {
+      const data = mockPortfolioData[timeRange];
+      const ctx = document.getElementById('performanceChart').getContext('2d');
+      const yRange = calculateYRange(data.values);
+      const current = data.values[data.values.length - 1];
+      const isUp = current >= data.startValue;
+
+      if (performanceChart) {
+        performanceChart.destroy();
+      }
+
+      performanceChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: data.labels,
+          datasets: [{
+            label: 'Portfolio Value',
+            data: data.values,
+            borderColor: isUp ? '#10b981' : '#ef4444',
+            backgroundColor: isUp ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+            fill: true,
+            tension: 0.4,
+            pointRadius: 4,
+            pointHoverRadius: 6
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { intersect: false, mode: 'index' },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: '#1e293b',
+              titleColor: '#e2e8f0',
+              bodyColor: '#e2e8f0',
+              borderColor: '#334155',
+              borderWidth: 1,
+              padding: 12,
+              callbacks: {
+                label: function(context) {
+                  return 'Value: ' + formatCurrency(context.parsed.y);
+                }
+              }
+            }
+          },
+          scales: {
+            y: {
+              grid: { color: '#334155' },
+              ticks: {
+                color: '#94a3b8',
+                callback: function(value) {
+                  if (value >= 1000000) return '$' + (value / 1000000).toFixed(1) + 'M';
+                  if (value >= 1000) return '$' + (value / 1000).toFixed(1) + 'K';
+                  return '$' + value;
+                }
+              },
+              min: yRange.min,
+              max: yRange.max
+            },
+            x: {
+              grid: { display: false },
+              ticks: { color: '#94a3b8' }
+            }
+          }
+        }
+      });
+    }
+
+    async function connectToAgent() {
+      agentUrl = document.getElementById('agentUrl').value || 'http://localhost:3000';
+      
+      // Update UI
+      document.getElementById('statusDot').className = 'status-dot status-connected';
+      document.getElementById('connectionStatus').textContent = 'Connected';
+      
+      // Remove loading states
+      document.querySelectorAll('.loading').forEach(el => {
+        el.classList.remove('loading');
+      });
+      
+      isConnected = true;
+      
+      // Start fetching data
+      await fetchAgentData();
+      updateInterval = setInterval(fetchAgentData, 5000); // Update every 5 seconds
+      
+      // Show mock data immediately
+      updateDashboardWithMockData();
+    }
+
+    function disconnectAgent() {
+      isConnected = false;
+      if (updateInterval) {
+        clearInterval(updateInterval);
+        updateInterval = null;
+      }
+      
+      document.getElementById('statusDot').className = 'status-dot status-disconnected';
+      document.getElementById('connectionStatus').textContent = 'Disconnected';
+      
+      // Reset to loading state
+      document.getElementById('portfolioValue').textContent = '--';
+      document.getElementById('portfolioValue').classList.add('loading');
+      document.getElementById('dailyPnl').textContent = '--';
+      document.getElementById('dailyPnl').classList.add('loading');
+    }
+
+    async function fetchAgentData() {
+      try {
+        // TODO: Replace with actual API calls
+        // const response = await fetch(`${agentUrl}/api/portfolio`);
+        // const data = await response.json();
+        // updateDashboard(data);
+        
+        // For now, simulate updates
+        simulateLiveUpdates();
+      } catch (error) {
+        console.error('Failed to fetch agent data:', error);
+      }
+    }
+
+    function simulateLiveUpdates() {
+      // Simulate small price movements
+      const baseValue = 12547;
+      const variation = (Math.random() - 0.5) * 50;
+      const currentValue = baseValue + variation;
+      const change = currentValue - 12205;
+      const changePercent = (change / 12205 * 100).toFixed(2);
+      
+      document.getElementById('portfolioValue').textContent = formatCurrency(currentValue);
+      document.getElementById('portfolioValue').classList.remove('loading');
+      
+      const changeEl = document.getElementById('portfolioChange');
+      changeEl.innerHTML = `<span class="${change >= 0 ? 'positive' : 'negative'}">${change >= 0 ? '+' : ''}${formatCurrency(change)} (${change >= 0 ? '+' : ''}${changePercent}%)</span>`;
+      
+      document.getElementById('dailyPnl').textContent = formatCurrency(Math.abs(change * 0.85));
+      document.getElementById('dailyPnl').classList.remove('loading');
+      document.getElementById('dailyPnlPercent').textContent = `+${(changePercent * 0.85).toFixed(2)}%`;
+      
+      document.getElementById('openPositions').textContent = '3';
+      document.getElementById('openPositions').classList.remove('loading');
+      
+      document.getElementById('winRate').textContent = '75%';
+      document.getElementById('winRate').classList.remove('loading');
+      document.getElementById('totalTrades').textContent = '12 trades';
+      
+      document.getElementById('riskLevel').textContent = 'LOW 🟢';
+      document.getElementById('riskLevel').classList.remove('loading');
+      
+      document.getElementById('dailyLoss').textContent = '$0 / $500';
+      document.getElementById('dailyLoss').classList.remove('loading');
+      
+      document.getElementById('maxDrawdown').textContent = '0.8%';
+      document.getElementById('maxDrawdown').classList.remove('loading');
+      
+      document.getElementById('circuitBreaker').textContent = 'Ready ✅';
+      document.getElementById('circuitBreaker').classList.remove('loading');
+      
+      // Update timestamps
+      const now = new Date().toLocaleTimeString();
+      document.getElementById('chartUpdated').textContent = `Last updated: ${now}`;
+      document.getElementById('tradesUpdated').textContent = `Last updated: ${now}`;
+      document.getElementById('strategiesUpdated').textContent = `Last updated: ${now}`;
+    }
+
+    function updateDashboardWithMockData() {
+      // Mock recent trades
+      const tradesHtml = `
+        <div class="trade-row trade-buy">
+          <div>
+            <span class="positive font-bold">BUY</span> 7.05 SOL
+            <div class="text-sm text-gray-400">Strategy: LLM</div>
+          </div>
+          <div class="text-right">
+            <div>${formatCurrency(142.30)}</div>
+            <div class="text-sm text-gray-400">+${formatCurrency(45.20)}</div>
+          </div>
+        </div>
+        <div class="trade-row trade-sell">
+          <div>
+            <span class="negative font-bold">SELL</span> 2.5M BONK
+            <div class="text-sm text-gray-400">Strategy: Momentum</div>
+          </div>
+          <div class="text-right">
+            <div>${formatCurrency(0.0000260)}</div>
+            <div class="text-sm positive">+${formatCurrency(6.50)} (+11.1%)</div>
+          </div>
+        </div>
+        <div class="trade-row trade-buy">
+          <div>
+            <span class="positive font-bold">BUY</span> 125 WIF
+            <div class="text-sm text-gray-400">Strategy: Mean Reversion</div>
+          </div>
+          <div class="text-right">
+            <div>${formatCurrency(2.15)}</div>
+            <div class="text-sm negative">${formatCurrency(-2.30)}</div>
+          </div>
+        </div>
+      `;
+      document.getElementById('recentTrades').innerHTML = tradesHtml;
+      
+      // Mock active strategies
+      const strategiesHtml = `
+        <div class="stat-row">
+          <span class="stat-label">📈 Momentum Breakout</span>
+          <span class="positive">40% • Active</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">↔️ Mean Reversion</span>
+          <span class="positive">40% • Active</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">🤖 LLM Strategy</span>
+          <span class="positive">20% • Active</span>
+        </div>
+        <div class="mt-4 pt-4 border-t border-gray-700">
+          <div class="stat-row">
+            <span class="stat-label">Total Allocated</span>
+            <span>100%</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">Rebalance In</span>
+            <span>8h 34m</span>
+          </div>
+        </div>
+      `;
+      document.getElementById('activeStrategies').innerHTML = strategiesHtml;
+    }
+
+    function changeTimeRange(range) {
+      document.querySelectorAll('.btn').forEach(btn => btn.classList.remove('active'));
+      document.getElementById('btn-' + range).classList.add('active');
+      renderChart(range);
+    }
+
+    // Initialize
+    document.addEventListener('DOMContentLoaded', function() {
+      renderChart('1D');
+    });
+  </script>
+</body>
+</html>

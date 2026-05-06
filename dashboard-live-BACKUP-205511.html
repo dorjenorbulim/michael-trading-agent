@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Trading Dashboard - Live</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-white p-6" onload="startDashboard()">
+  <div class="max-w-6xl mx-auto">
+    <h1 class="text-3xl font-bold mb-6">📊 Trading Dashboard</h1>
+    
+    <div class="grid grid-cols-3 gap-4 mb-6">
+      <div class="bg-gray-800 p-4 rounded">
+        <div class="text-gray-400">Portfolio Value</div>
+        <div class="text-2xl font-bold" id="value">$--</div>
+      </div>
+      <div class="bg-gray-800 p-4 rounded">
+        <div class="text-gray-400">Return</div>
+        <div class="text-2xl font-bold" id="return">--</div>
+      </div>
+      <div class="bg-gray-800 p-4 rounded">
+        <div class="text-gray-400">Auto Trading</div>
+        <div class="text-2xl font-bold" id="auto">--</div>
+      </div>
+    </div>
+
+    <div class="bg-gray-800 p-4 rounded mb-6">
+      <h2 class="text-xl font-bold mb-4">Prices</h2>
+      <div class="grid grid-cols-6 gap-4" id="prices">Loading...</div>
+    </div>
+
+    <div class="bg-gray-800 p-4 rounded mb-6">
+      <h2 class="text-xl font-bold mb-4">Signals</h2>
+      <div class="grid grid-cols-6 gap-4" id="signals">Loading...</div>
+    </div>
+
+    <div class="bg-gray-800 p-4 rounded">
+      <h2 class="text-xl font-bold mb-4">Recent Trades</h2>
+      <div id="trades">No trades yet</div>
+    </div>
+  </div>
+
+  <script>
+    const API = 'http://localhost:3002';
+    let refreshTimer;
+
+    function startDashboard() {
+      loadStatus();
+      refreshTimer = setInterval(loadStatus, 5000);
+    }
+
+    async function loadStatus() {
+      try {
+        const res = await fetch(API + '/api/status');
+        const data = await res.json();
+        updateDashboard(data);
+      } catch(e) {
+        console.error('API Error:', e.message);
+      }
+    }
+
+    function updateDashboard(data) {
+      document.getElementById('value').textContent = '$' + data.portfolio.totalValue;
+      const ret = data.portfolio.totalReturn;
+      document.getElementById('return').innerHTML = 
+        '<span class="' + (ret >= 0 ? 'text-green-400' : 'text-red-400') + '">' + ret + '%</span>';
+      document.getElementById('auto').textContent = data.autoTrading.enabled ? 'ON (' + data.autoTrading.strategy + ')' : 'OFF';
+      
+      // Prices
+      let pricesHtml = '';
+      for (const [token, price] of Object.entries(data.prices)) {
+        pricesHtml += '<div class="text-center"><div class="text-yellow-400">' + token + '</div><div>$' + (price > 1 ? price.toFixed(2) : price.toFixed(4)) + '</div></div>';
+      }
+      document.getElementById('prices').innerHTML = pricesHtml;
+      
+      // Signals
+      let signalsHtml = '';
+      for (const [token, sig] of Object.entries(data.signals)) {
+        const color = sig.overall === 'BUY' ? 'text-green-400' : sig.overall === 'SELL' ? 'text-red-400' : 'text-gray-400';
+        signalsHtml += '<div class="text-center"><div class="text-gray-400">' + token + '</div><div class="font-bold ' + color + '">' + sig.overall + '</div></div>';
+      }
+      document.getElementById('signals').innerHTML = signalsHtml;
+      
+      // Trades
+      if (data.trades && data.trades.length > 0) {
+        let tradesHtml = '<table class="w-full text-sm"><tr><th>Time</th><th>Type</th><th>Token</th><th>Price</th></tr>';
+        data.trades.slice(0, 10).forEach(t => {
+          const time = new Date(t.date).toLocaleTimeString();
+          tradesHtml += '<tr><td>' + time + '</td><td class="' + (t.type === 'BUY' ? 'text-green-400' : 'text-red-400') + '">' + t.type + '</td><td>' + t.token + '</td><td>$' + t.price + '</td></tr>';
+        });
+        tradesHtml += '</table>';
+        document.getElementById('trades').innerHTML = tradesHtml;
+      }
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trading Dashboard - Time Series</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { background: #0f172a; color: #e2e8f0; font-family: system-ui, sans-serif; }
+    .card { background: #1e293b; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+    .positive { color: #10b981; }
+    .negative { color: #ef4444; }
+    .btn { background: #3b82f6; color: white; padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-size: 14px; }
+    .btn:hover { background: #2563eb; }
+    .btn.active { background: #10b981; }
+    .btn-green { background: #10b981; }
+    .btn-green:hover { background: #059669; }
+    .chart-container { position: relative; height: 300px; width: 100%; }
+    .time-btn { margin-right: 8px; margin-bottom: 8px; }
+    .stat-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #334155; }
+    .stat-label { color: #94a3b8; }
+    .stat-value { font-weight: 600; }
+  </style>
+</head>
+<body class="p-6">
+  <div class="max-w-7xl mx-auto">
+    <!-- Header -->
+    <div class="flex justify-between items-center mb-6">
+      <div>
+        <h1 class="text-3xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
+          Trading Dashboard
+        </h1>
+        <p class="text-gray-400 mt-1">Time-Based Performance Analysis</p>
+      </div>
+      <div class="flex gap-3">
+        <span class="bg-yellow-500/20 text-yellow-400 px-3 py-1 rounded text-sm">PAPER TRADING</span>
+      </div>
+    </div>
+
+    <!-- Time Range Selector -->
+    <div class="card">
+      <div class="flex flex-wrap mb-4">
+        <button onclick="changeTimeRange('1H')" id="btn-1H" class="btn time-btn">1 Hour</button>
+        <button onclick="changeTimeRange('1D')" id="btn-1D" class="btn time-btn active">1 Day</button>
+        <button onclick="changeTimeRange('1W')" id="btn-1W" class="btn time-btn">1 Week</button>
+        <button onclick="changeTimeRange('1M')" id="btn-1M" class="btn time-btn">1 Month</button>
+        <button onclick="changeTimeRange('YTD')" id="btn-YTD" class="btn time-btn">YTD</button>
+        <button onclick="changeTimeRange('1Y')" id="btn-1Y" class="btn time-btn">1 Year</button>
+      </div>
+      
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div class="lg:col-span-2">
+          <div class="chart-container">
+            <canvas id="mainChart"></canvas>
+          </div>
+        </div>
+        
+        <div class="bg-gray-800/50 rounded-lg p-4">
+          <h3 class="font-semibold mb-4 text-lg">Period Statistics</h3>
+          <div id="periodStats">
+            <!-- Filled by JS -->
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Overview Cards -->
+    <div class="grid grid-cols-4 gap-4 mb-6">
+      <div class="card">
+        <p class="text-gray-400 text-sm">Current Value</p>
+        <p class="text-2xl font-bold" id="currentValue">$12,547.32</p>
+        <p class="text-sm positive mt-1">+$342.15 (+2.8%)</p>
+      </div>
+      <div class="card">
+        <p class="text-gray-400 text-sm">Period Start</p>
+        <p class="text-2xl font-bold" id="periodStart">$12,205.17</p>
+        <p class="text-sm text-gray-400 mt-1" id="periodStartDate">24h ago</p>
+      </div>
+      <div class="card">
+        <p class="text-gray-400 text-sm">Period High</p>
+        <p class="text-2xl font-bold positive" id="periodHigh">$12,890.45</p>
+      </div>
+      <div class="card">
+        <p class="text-gray-400 text-sm">Period Low</p>
+        <p class="text-2xl font-bold negative" id="periodLow">$11,980.20</p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Data for different time ranges
+    const timeData = {
+      '1H': {
+        labels: ['10:00', '10:15', '10:30', '10:45', '11:00', '11:15', '11:30', '11:45', '12:00'],
+        values: [12500, 12512, 12495, 12520, 12535, 12528, 12540, 12547, 12547],
+        startValue: 12500,
+        startDate: '1 hour ago',
+        high: 12547,
+        low: 12495,
+        change: 47,
+        changePercent: 0.38
+      },
+      '1D': {
+        labels: ['00:00', '03:00', '06:00', '09:00', '12:00', '15:00', '18:00', '21:00', '24:00'],
+        values: [12205, 12120, 11980, 12540, 12200, 11890, 12150, 12400, 12547],
+        startValue: 12205,
+        startDate: '24 hours ago',
+        high: 12540,
+        low: 11890,
+        change: 342,
+        changePercent: 2.80
+      },
+      '1W': {
+        labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+        values: [11000, 11250, 11500, 11400, 11800, 12100, 12547],
+        startValue: 11000,
+        startDate: '7 days ago',
+        high: 12547,
+        low: 11000,
+        change: 1547,
+        changePercent: 14.06
+      },
+      '1M': {
+        labels: ['Week 1', 'Week 2', 'Week 3', 'Week 4'],
+        values: [10000, 10500, 11500, 12547],
+        startValue: 10000,
+        startDate: '30 days ago',
+        high: 12547,
+        low: 9800,
+        change: 2547,
+        changePercent: 25.47
+      },
+      'YTD': {
+        labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May'],
+        values: [8500, 9200, 10500, 11800, 12547],
+        startValue: 8500,
+        startDate: 'Jan 1, 2026',
+        high: 12547,
+        low: 8200,
+        change: 4047,
+        changePercent: 47.61
+      },
+      '1Y': {
+        labels: ['Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar', 'Apr', 'May'],
+        values: [5000, 5500, 6200, 7000, 7800, 8500, 8200, 9200, 10500, 11200, 11800, 12547],
+        startValue: 5000,
+        startDate: '1 year ago',
+        high: 12547,
+        low: 4800,
+        change: 7547,
+        changePercent: 150.94
+      }
+    };
+
+    let currentRange = '1D';
+    let mainChart = null;
+
+    function formatCurrency(value) {
+      return '$' + value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function calculateYAxisRange(values) {
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const range = max - min;
+      const padding = range * 0.1; // 10% padding
+      return {
+        min: Math.floor(min - padding),
+        max: Math.ceil(max + padding)
+      };
+    }
+
+    function updateStats(range) {
+      const data = timeData[range];
+      
+      document.getElementById('currentValue').innerHTML = formatCurrency(data.values[data.values.length - 1]) + 
+        `\u003cspan class="text-sm ${data.change >= 0 ? 'positive' : 'negative'} ml-2">${data.change >= 0 ? '+' : ''}${formatCurrency(data.change)} (${data.changePercent.toFixed(2)}%)\u003c/span>`;
+      
+      document.getElementById('periodStart').textContent = formatCurrency(data.startValue);
+      document.getElementById('periodStartDate').textContent = data.startDate;
+      document.getElementById('periodHigh').textContent = formatCurrency(data.high);
+      document.getElementById('periodLow').textContent = formatCurrency(data.low);
+
+      // Update period stats panel
+      const statsHtml = `
+        \u003cdiv class="stat-row"\u003e\u003cspan class="stat-label"\u003eStarting Price\u003c/span\u003e\u003cspan class="stat-value"\u003e${formatCurrency(data.startValue)}\u003c/span\u003e\u003c/div\u003e
+        \u003cdiv class="stat-row"\u003e\u003cspan class="stat-label"\u003eCurrent Price\u003c/span\u003e\u003cspan class="stat-value"\u003e${formatCurrency(data.values[data.values.length - 1])}\u003c/span\u003e\u003c/div\u003e
+        \u003cdiv class="stat-row"\u003e\u003cspan class="stat-label"\u003ePeriod High\u003c/span\u003e\u003cspan class="stat-value positive"\u003e${formatCurrency(data.high)}\u003c/span\u003e\u003c/div\u003e
+        \u003cdiv class="stat-row"\u003e\u003cspan class="stat-label"\u003ePeriod Low\u003c/span\u003e\u003cspan class="stat-value negative"\u003e${formatCurrency(data.low)}\u003c/span\u003e\u003c/div\u003e
+        \u003cdiv class="stat-row"\u003e\u003cspan class="stat-label"\u003eAbsolute Change\u003c/span\u003e\u003cspan class="stat-value ${data.change >= 0 ? 'positive' : 'negative'}"\u003e${data.change >= 0 ? '+' : ''}${formatCurrency(data.change)}\u003c/span\u003e\u003c/div\u003e
+        \u003cdiv class="stat-row"\u003e\u003cspan class="stat-label"\u003ePercentage Change\u003c/span\u003e\u003cspan class="stat-value ${data.change >= 0 ? 'positive' : 'negative'}"\u003e${data.change >= 0 ? '+' : ''}${data.changePercent.toFixed(2)}%\u003c/span\u003e\u003c/div\u003e
+        \u003cdiv class="stat-row"\u003e\u003cspan class="stat-label"\u003eVolatility\u003c/span\u003e\u003cspan class="stat-value"\u003e${((data.high - data.low) / data.startValue * 100).toFixed(2)}%\u003c/span\u003e\u003c/div\u003e
+      `;
+      document.getElementById('periodStats').innerHTML = statsHtml;
+    }
+
+    function renderChart(range) {
+      const data = timeData[range];
+      const ctx = document.getElementById('mainChart').getContext('2d');
+      const yRange = calculateYAxisRange(data.values);
+
+      if (mainChart) {
+        mainChart.destroy();
+      }
+
+      mainChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: data.labels,
+          datasets: [{
+            label: 'Portfolio Value',
+            data: data.values,
+            borderColor: data.values[data.values.length - 1] >= data.values[0] ? '#10b981' : '#ef4444',
+            backgroundColor: data.values[data.values.length - 1] >= data.values[0] ? 
+              'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+            fill: true,
+            tension: 0.4,
+            pointRadius: 4,
+            pointHoverRadius: 6
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: {
+            intersect: false,
+            mode: 'index'
+          },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: '#1e293b',
+              titleColor: '#e2e8f0',
+              bodyColor: '#e2e8f0',
+              borderColor: '#334155',
+              borderWidth: 1,
+              padding: 12,
+              callbacks: {
+                label: function(context) {
+                  const value = context.parsed.y;
+                  const start = data.startValue;
+                  const change = value - start;
+                  const changePct = ((change / start) * 100).toFixed(2);
+                  return [
+                    `Value: ${formatCurrency(value)}`,
+                    `Change: ${change >= 0 ? '+' : ''}${formatCurrency(change)} (${changePct}%)`
+                  ];
+                }
+              }
+            }
+          },
+          scales: {
+            y: {
+              grid: { color: '#334155' },
+              ticks: {
+                color: '#94a3b8',
+                callback: function(value) {
+                  if (value >= 1000000) return '$' + (value / 1000000).toFixed(1) + 'M';
+                  if (value >= 1000) return '$' + (value / 1000).toFixed(1) + 'K';
+                  return '$' + value;
+                }
+              },
+              min: yRange.min,
+              max: yRange.max
+            },
+            x: {
+              grid: { display: false },
+              ticks: { color: '#94a3b8' }
+            }
+          }
+        }
+      });
+    }
+
+    function changeTimeRange(range) {
+      // Update active button
+      document.querySelectorAll('.time-btn').forEach(btn => {
+        btn.classList.remove('active');
+      });
+      document.getElementById('btn-' + range).classList.add('active');
+      
+      currentRange = range;
+      renderChart(range);
+      updateStats(range);
+    }
+
+    // Initialize
+    document.addEventListener('DOMContentLoaded', function() {
+      renderChart('1D');
+      updateStats('1D');
+    });
+  </script>
+</body>
+</html>

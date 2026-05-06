@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trading Dashboard - LIVE DEMO</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { background: #0f172a; color: #e2e8f0; font-family: system-ui, sans-serif; }
+    .card { background: #1e293b; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+    .positive { color: #10b981; }
+    .negative { color: #ef4444; }
+    .btn { background: #3b82f6; color: white; padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; }
+    .btn:hover { background: #2563eb; }
+    .btn-green { background: #10b981; }
+    .btn-green:hover { background: #059669; }
+    .btn-red { background: #ef4444; }
+    .btn-red:hover { background: #dc2626; }
+    .chart-container { position: relative; height: 300px; width: 100%; }
+    .pulse { animation: pulse 1.5s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    .stat-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #334155; }
+    .stat-label { color: #94a3b8; }
+    .trade-row { display: flex; justify-content: space-between; padding: 12px; border-bottom: 1px solid #334155; animation: slideIn 0.3s ease-out; }
+    @keyframes slideIn { from { transform: translateX(-20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    .trade-buy { border-left: 3px solid #10b981; }
+    .trade-sell { border-left: 3px solid #ef4444; }
+    .last-updated { font-size: 12px; color: #64748b; margin-top: 8px; }
+    .live-indicator { display: inline-flex; align-items: center; gap: 8px; }
+    .live-dot { width: 8px; height: 8px; background: #10b981; border-radius: 50%; animation: blink 1s infinite; }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    .strategy-card { background: #0f172a; border-radius: 8px; padding: 12px; margin-bottom: 8px; }
+    .log-entry { font-family: monospace; font-size: 12px; padding: 4px 0; border-bottom: 1px solid #1e293b; }
+    .log-time { color: #64748b; }
+    .log-info { color: #60a5fa; }
+    .log-trade { color: #10b981; }
+    .log-alert { color: #f59e0b; }
+    #terminal { background: #0a0a0a; border-radius: 8px; padding: 16px; font-family: monospace; font-size: 13px; max-height: 200px; overflow-y: auto; }
+  </style>
+</head>
+<body class="p-6">
+  <div class="max-w-7xl mx-auto">
+    <!-- Header -->
+    <div class="flex justify-between items-center mb-6">
+      <div>
+        <h1 class="text-3xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
+          Trading Dashboard
+        </h1>
+        <p class="text-gray-400 mt-1">Live Trading Simulation</p>
+      </div>
+      <div class="flex items-center gap-4">
+        <div class="live-indicator">
+          <span class="live-dot"></span>
+          <span id="simulationStatus">LIVE</span>
+        </div>
+        <span class="bg-yellow-500/20 text-yellow-400 px-3 py-1 rounded text-sm">PAPER TRADING</span>
+      </div>
+    </div>
+
+    <!-- Control Panel -->
+    <div class="card mb-6">
+      <div class="flex justify-between items-center">
+        <div>
+          <h3 class="font-semibold mb-2">Simulation Controls</h3>
+          <p class="text-sm text-gray-400">Watch the AI trade in real-time. Updates every 3 seconds.</p>
+        </div>
+        <div class="flex gap-3">
+          <button onclick="startSimulation()" id="startBtn" class="btn-green">▶ Start Trading</button>
+          <button onclick="stopSimulation()" id="stopBtn" class="btn-red" disabled>⏹ Stop</button>
+          <button onclick="resetSimulation()" class="btn bg-gray-600">↺ Reset</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stats Grid -->
+    <div class="grid grid-cols-4 gap-4 mb-6">
+      <div class="card">
+        <p class="text-gray-400 text-sm">Portfolio Value</p>
+        <p class="text-2xl font-bold" id="portfolioValue">$12,547.32</p>
+        <p class="text-sm" id="portfolioChange"><span class="positive">+$0.00 (0.00%)</span></p>
+      </div>
+      <div class="card">
+        <p class="text-gray-400 text-sm">Daily P&L</p>
+        <p class="text-2xl font-bold" id="dailyPnl">$0.00</p>
+        <p class="text-sm text-gray-400" id="dailyPnlPercent">+0.00%</p>
+      </div>
+      <div class="card">
+        <p class="text-gray-400 text-sm">Open Positions</p>
+        <p class="text-2xl font-bold" id="openPositions">0</p>
+        <p class="text-sm text-gray-400">Active trades</p>
+      </div>
+      <div class="card">
+        <p class="text-gray-400 text-sm">Win Rate</p>
+        <p class="text-2xl font-bold" id="winRate">0%</p>
+        <p class="text-sm text-gray-400" id="totalTrades">0 trades</p>
+      </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="card mb-6">
+      <div class="flex justify-between items-center mb-4">
+        <h3 class="font-semibold">Portfolio Performance</h3>
+        <span class="text-sm text-gray-400" id="chartRange">Live</span>
+      </div>
+      <div class="chart-container">
+        <canvas id="performanceChart"></canvas>
+      </div>
+      <p class="last-updated" id="chartUpdated">Last updated: --</p>
+    </div>
+
+    <!-- Live Activity -->
+    <div class="grid grid-cols-3 gap-4 mb-6">
+      <div class="card">
+        <h3 class="font-semibold mb-4">Live Trades</h3>
+        <div id="recentTrades" class="max-h-64 overflow-y-auto">
+          <p class="text-gray-500 text-center py-8">Click "Start Trading" to see live trades</p>
+        </div>
+        <p class="last-updated" id="tradesUpdated">--</p>
+      </div>
+      <div class="card">
+        <h3 class="font-semibold mb-4">Active Strategies</h3>
+        <div id="activeStrategies">
+          <p class="text-gray-500 text-center py-8">Waiting to start...</p>
+        </div>
+      </div>
+      <div class="card">
+        <h3 class="font-semibold mb-4">Risk Metrics</h3>
+        <div id="riskMetrics">
+          <div class="stat-row">
+            <span class="stat-label">Risk Level</span>
+            <span>--</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">Daily Loss</span>
+            <span>--</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">Circuit Breaker</span>
+            <span>--</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">Exposure</span>
+            <span>0%</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Live Terminal Log -->
+    <div class="card">
+      <h3 class="font-semibold mb-4">Agent Log</h3>
+      <div id="terminal">
+        <div class="text-gray-500">System ready. Click "Start Trading" to begin simulation.</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Simulation state
+    let simulationRunning = false;
+    let simulationInterval = null;
+    let portfolioValue = 4000;
+    let startingValue = 4000;
+    let dailyPnl = 0;
+    let totalCommission = 0;
+    let openPositions = [];
+    let closedTrades = [];
+    let chartData = [];
+    let chartLabels = [];
+    let performanceChart = null;
+    
+    // Mock trading data - Major cryptocurrencies only
+    const COMMISSION_RATE = 0.001; // 0.1% commission per trade
+    
+    const tokens = [
+      { symbol: 'BTC', name: 'Bitcoin', price: 95000.00, volatility: 0.015 },
+      { symbol: 'ETH', name: 'Ethereum', price: 3450.00, volatility: 0.02 },
+      { symbol: 'SOL', name: 'Solana', price: 142.30, volatility: 0.025 }
+    ];
+    
+    const strategies = [
+      { name: 'LLM Strategy', id: 'llm', allocation: 0.15, color: '#8b5cf6', description: 'AI-powered market analysis' },
+      { name: 'Momentum Breakout', id: 'momentum', allocation: 0.15, color: '#3b82f6', description: 'Technical breakouts with volume' },
+      { name: 'Mean Reversion', id: 'reversion', allocation: 0.15, color: '#10b981', description: 'Range-bound trading' },
+      { name: 'Grid Trading', id: 'grid', allocation: 0.15, color: '#f59e0b', description: 'Buy low, sell high in range' },
+      { name: 'DCA Strategy', id: 'dca', allocation: 0.15, color: '#ec4899', description: 'Regular interval buying' },
+      { name: 'Trend Following', id: 'trend', allocation: 0.15, color: '#06b6d4', description: 'Moving average crossover' },
+      { name: 'Breakout Scalping', id: 'scalp', allocation: 0.10, color: '#ef4444', description: 'Quick volatility trades' }
+    ];
+    
+    // Initialize chart
+    function initChart() {
+      const ctx = document.getElementById('performanceChart').getContext('2d');
+      
+      // Generate initial data points
+      const now = new Date();
+      for (let i = 20; i >= 0; i--) {
+        const time = new Date(now - i * 3000);
+        chartLabels.push(time.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+        chartData.push(portfolioValue);
+      }
+      
+      performanceChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: chartLabels,
+          datasets: [{
+            label: 'Portfolio Value',
+            data: chartData,
+            borderColor: '#10b981',
+            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+            fill: true,
+            tension: 0.4,
+            pointRadius: 3,
+            pointHoverRadius: 6
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: { duration: 0 },
+          interaction: { intersect: false, mode: 'index' },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: '#1e293b',
+              titleColor: '#e2e8f0',
+              bodyColor: '#e2e8f0',
+              borderColor: '#334155',
+              borderWidth: 1
+            }
+          },
+          scales: {
+            y: {
+              grid: { color: '#334155' },
+              ticks: {
+                color: '#94a3b8',
+                callback: function(value) {
+                  return '$' + value.toLocaleString();
+                }
+              }
+            },
+            x: {
+              grid: { display: false },
+              ticks: { 
+                color: '#94a3b8',
+                maxTicksLimit: 8
+              }
+            }
+          }
+        }
+      });
+    }
+    
+    function formatCurrency(value) {
+      return '$' + Math.abs(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    
+    function addLogEntry(message, type = 'info') {
+      const terminal = document.getElementById('terminal');
+      const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+      const colorClass = type === 'trade' ? 'log-trade' : type === 'alert' ? 'log-alert' : 'log-info';
+      
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      entry.innerHTML = `<span class="log-time">[${time}]</span> <span class="${colorClass}">${message}</span>`;
+      
+      terminal.appendChild(entry);
+      terminal.scrollTop = terminal.scrollHeight;
+      
+      // Keep only last 50 entries
+      while (terminal.children.length > 50) {
+        terminal.removeChild(terminal.firstChild);
+      }
+    }
+    
+    function startSimulation() {
+      if (simulationRunning) return;
+      
+      simulationRunning = true;
+      document.getElementById('startBtn').disabled = true;
+      document.getElementById('stopBtn').disabled = false;
+      document.getElementById('simulationStatus').textContent = 'TRADING';
+      
+      addLogEntry('🚀 Multi-Strategy Trading Started', 'alert');
+      addLogEntry('Profile: Balanced (LLM 20%, Momentum 40%, Mean Reversion 40%)', 'info');
+      addLogEntry('Risk Dashboard: Circuit breaker armed ($500 limit)', 'info');
+      
+      updateStrategiesDisplay();
+      
+      // Start the trading simulation
+      simulationInterval = setInterval(tradingTick, 3000);
+    }
+    
+    function stopSimulation() {
+      simulationRunning = false;
+      clearInterval(simulationInterval);
+      
+      document.getElementById('startBtn').disabled = false;
+      document.getElementById('stopBtn').disabled = true;
+      document.getElementById('simulationStatus').textContent = 'PAUSED';
+      
+      addLogEntry('⏹ Trading paused', 'alert');
+    }
+    
+    function resetSimulation() {
+      stopSimulation();
+      portfolioValue = 4000;
+      startingValue = 4000;
+      dailyPnl = 0;
+      totalCommission = 0;
+      openPositions = [];
+      closedTrades = [];
+      chartData = [];
+      chartLabels = [];
+      
+      document.getElementById('portfolioValue').textContent = formatCurrency(portfolioValue);
+      document.getElementById('portfolioChange').innerHTML = '<span class="positive">+$0.00 (0.00%)</span>';
+      document.getElementById('dailyPnl').textContent = '$0.00';
+      document.getElementById('dailyPnlPercent').textContent = '+0.00%';
+      document.getElementById('openPositions').textContent = '0';
+      document.getElementById('winRate').textContent = '0%';
+      document.getElementById('totalTrades').textContent = '0 trades';
+      document.getElementById('recentTrades').innerHTML = '<p class="text-gray-500 text-center py-8">Click "Start Trading" to see live trades</p>';
+      document.getElementById('activeStrategies').innerHTML = '<p class="text-gray-500 text-center py-8">Waiting to start...</p>';
+      document.getElementById('riskMetrics').innerHTML = `
+        <div class="stat-row"><span class="stat-label">Risk Level</span><span>--</span></div>
+        <div class="stat-row"><span class="stat-label">Daily Loss</span><span>--</span></div>
+        <div class="stat-row"><span class="stat-label">Circuit Breaker</span><span>--</span></div>
+        <div class="stat-row"><span class="stat-label">Exposure</span><span>0%</span></div>
+        <div class="stat-row"><span class="stat-label">Total Commission (0.1%)</span><span>$0.00</span></div>
+      `;
+      document.getElementById('terminal').innerHTML = '<div class="text-gray-500">System reset. Ready to trade.</div>';
+      
+      if (performanceChart) {
+        performanceChart.destroy();
+      }
+      initChart();
+      
+      document.getElementById('simulationStatus').textContent = 'LIVE';
+    }
+    
+    function tradingTick() {
+      const now = new Date();
+      
+      // Random market movement
+      const marketChange = (Math.random() - 0.48) * 50; // Slight upward bias
+      portfolioValue += marketChange;
+      
+      // Update chart
+      const timeStr = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      chartLabels.push(timeStr);
+      chartData.push(portfolioValue);
+      
+      if (chartLabels.length > 30) {
+        chartLabels.shift();
+        chartData.shift();
+      }
+      
+      // Update chart color based on performance
+      const isUp = portfolioValue >= startingValue;
+      performanceChart.data.datasets[0].borderColor = isUp ? '#10b981' : '#ef4444';
+      performanceChart.data.datasets[0].backgroundColor = isUp ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)';
+      performanceChart.data.labels = chartLabels;
+      performanceChart.data.datasets[0].data = chartData;
+      performanceChart.update('none');
+      
+      // Calculate P&L
+      dailyPnl = portfolioValue - startingValue;
+      const changePercent = (dailyPnl / startingValue * 100).toFixed(2);
+      
+      // Update display
+      document.getElementById('portfolioValue').textContent = formatCurrency(portfolioValue);
+      const changeClass = dailyPnl >= 0 ? 'positive' : 'negative';
+      const changeSign = dailyPnl >= 0 ? '+' : '';
+      document.getElementById('portfolioChange').innerHTML = `<span class="${changeClass}">${changeSign}${formatCurrency(dailyPnl)} (${changeSign}${changePercent}%)</span>`;
+      document.getElementById('dailyPnl').textContent = formatCurrency(dailyPnl);
+      document.getElementById('dailyPnl').className = 'text-2xl font-bold ' + changeClass;
+      document.getElementById('dailyPnlPercent').textContent = `${changeSign}${changePercent}%`;
+      document.getElementById('dailyPnlPercent').className = 'text-sm ' + changeClass;
+      document.getElementById('chartUpdated').textContent = `Last updated: ${timeStr}`;
+      
+      // Random trade generation (30% chance per tick)
+      if (Math.random() < 0.3 && openPositions.length < 5) {
+        generateTrade();
+      }
+      
+      // Check for position closures
+      openPositions.forEach((pos, index) => {
+        if (Math.random() < 0.15) { // 15% chance to close
+          closePosition(index);
+        }
+      });
+      
+      updateStats();
+      updateRiskMetrics();
+    }
+    
+    function generateTrade() {
+      const token = tokens[Math.floor(Math.random() * tokens.length)];
+      const strategy = strategies[Math.floor(Math.random() * strategies.length)];
+      
+      // Strategy-specific logic
+      let rawAmount, entryPrice, stopLoss, takeProfit, side;
+      
+      switch(strategy.id) {
+        case 'llm':
+          // LLM Strategy - AI analysis, moderate positions
+          side = Math.random() > 0.35 ? 'BUY' : 'SELL';
+          rawAmount = 600 + Math.random() * 800;
+          entryPrice = token.price * (1 + (Math.random() - 0.5) * 0.02);
+          stopLoss = entryPrice * 0.93;
+          takeProfit = entryPrice * 1.18;
+          break;
+          
+        case 'momentum':
+          // Momentum Breakout - Volatility plays, tight stops
+          side = Math.random() > 0.3 ? 'BUY' : 'SELL';
+          rawAmount = 400 + Math.random() * 700;
+          entryPrice = token.price * (1 + (Math.random() - 0.45) * 0.04);
+          stopLoss = entryPrice * 0.94;
+          takeProfit = entryPrice * 1.12;
+          break;
+          
+        case 'reversion':
+          // Mean Reversion - Counter-trend, wider stops
+          side = Math.random() > 0.5 ? 'BUY' : 'SELL';
+          rawAmount = 500 + Math.random() * 900;
+          entryPrice = token.price * (1 - (Math.random() - 0.5) * 0.03);
+          stopLoss = entryPrice * 0.91;
+          takeProfit = entryPrice * 1.22;
+          break;
+          
+        case 'grid':
+          // Grid Trading - Smaller amounts, fixed intervals
+          side = 'BUY';
+          rawAmount = 300 + Math.random() * 400;
+          entryPrice = token.price * 0.985; // Buy slightly below
+          stopLoss = entryPrice * 0.88;
+          takeProfit = entryPrice * 1.05; // Quick 5% target
+          break;
+          
+        case 'dca':
+          // DCA Strategy - Regular small buys regardless of price
+          side = 'BUY';
+          rawAmount = 250 + Math.random() * 250; // Fixed amount
+          entryPrice = token.price;
+          stopLoss = entryPrice * 0.75; // Long-term hold
+          takeProfit = entryPrice * 2.0; // 100% target
+          break;
+          
+        case 'trend':
+          // Trend Following - Follow moving averages
+          side = Math.random() > 0.4 ? 'BUY' : 'SELL';
+          rawAmount = 700 + Math.random() * 800;
+          entryPrice = token.price * (1 + (Math.random() - 0.5) * 0.015);
+          stopLoss = entryPrice * 0.92;
+          takeProfit = entryPrice * 1.25;
+          break;
+          
+        case 'scalp':
+          // Breakout Scalping - Very tight, quick trades
+          side = Math.random() > 0.45 ? 'BUY' : 'SELL';
+          rawAmount = 350 + Math.random() * 350;
+          entryPrice = token.price * (1 + (Math.random() - 0.5) * 0.01);
+          stopLoss = entryPrice * 0.97;
+          takeProfit = entryPrice * 1.04; // Quick 4%
+          break;
+          
+        default:
+          side = Math.random() > 0.4 ? 'BUY' : 'SELL';
+          rawAmount = 500 + Math.random() * 1000;
+          entryPrice = token.price * (1 + (Math.random() - 0.5) * 0.02);
+          stopLoss = entryPrice * 0.95;
+          takeProfit = entryPrice * 1.15;
+      }
+      
+      if (side === 'BUY') {
+        const commission = rawAmount * COMMISSION_RATE;
+        const amount = rawAmount - commission;
+        
+        const position = {
+          symbol: token.symbol,
+          strategy: strategy.name,
+          amount: amount,
+          entryPrice: entryPrice,
+          stopLoss: stopLoss,
+          takeProfit: takeProfit,
+          entryTime: new Date(),
+          entryCommission: commission
+        };
+        
+        openPositions.push(position);
+        
+        // Deduct commission from portfolio
+        portfolioValue -= commission;
+        
+        addLogEntry(`${strategy.id.toUpperCase()}: ${getStrategyAction(strategy.id, token.symbol)}`);
+        setTimeout(() => {
+          addLogEntry(`TRADE: BUY ${amount.toFixed(2)} worth of ${token.symbol} @ $${entryPrice.toFixed(4)}`, 'trade');
+          addLogEntry(`STRATEGY: ${strategy.description}`);
+          addLogEntry(`FEE: Commission charged $${commission.toFixed(2)} (0.1%)`);
+          updateTradesDisplay();
+        }, 500);
+      }
+    }
+    
+    function getStrategyAction(strategyId, symbol) {
+      const actions = {
+        'llm': `AI analysis complete on ${symbol} - bullish signal detected`,
+        'momentum': `${symbol} breakout detected - volume spike confirmed`,
+        'reversion': `${symbol} oversold - entering long position`,
+        'grid': `Grid buy triggered for ${symbol} at support level`,
+        'dca': `DCA interval reached - buying ${symbol}`,
+        'trend': `Trend signal: ${symbol} above 20-day MA`,
+        'scalp': `Scalp alert: ${symbol} quick momentum play`
+      };
+      return actions[strategyId] || `Analyzing ${symbol}...`;
+    }
+    
+    function closePosition(index) {
+      const pos = openPositions[index];
+      const exitPrice = pos.entryPrice * (1 + (Math.random() - 0.4) * 0.2); // Slight win bias
+      const rawPnl = pos.amount * (exitPrice - pos.entryPrice) / pos.entryPrice;
+      const exitCommission = (pos.amount + rawPnl) * COMMISSION_RATE;
+      const pnl = rawPnl - exitCommission;
+      
+      // Deduct exit commission from portfolio
+      portfolioValue -= exitCommission;
+      
+      closedTrades.push({
+        ...pos,
+        exitPrice: exitPrice,
+        pnl: pnl,
+        exitTime: new Date(),
+        closed: true,
+        exitCommission: exitCommission
+      });
+      
+      const isWin = pnl > 0;
+      const totalCommission = pos.entryCommission + exitCommission;
+      addLogEntry(`CLOSED: ${pos.symbol} ${isWin ? 'PROFIT' : 'LOSS'} ${isWin ? '+' : ''}$${Math.abs(pnl).toFixed(2)} (${((exitPrice/pos.entryPrice-1)*100).toFixed(1)}%)`, isWin ? 'trade' : 'alert');
+      addLogEntry(`FEE: Exit commission $${exitCommission.toFixed(2)} | Total fees $${totalCommission.toFixed(2)}`);
+      
+      openPositions.splice(index, 1);
+      updateTradesDisplay();
+    }
+    
+    function updateStats() {
+      document.getElementById('openPositions').textContent = openPositions.length;
+      
+      const totalTrades = closedTrades.length;
+      const winningTrades = closedTrades.filter(t => t.pnl > 0).length;
+      const winRate = totalTrades > 0 ? Math.round((winningTrades / totalTrades) * 100) : 0;
+      
+      document.getElementById('winRate').textContent = winRate + '%';
+      document.getElementById('totalTrades').textContent = totalTrades + ' closed, ' + openPositions.length + ' open';
+    }
+    
+    function updateTradesDisplay() {
+      const container = document.getElementById('recentTrades');
+      
+      if (openPositions.length === 0 && closedTrades.length === 0) {
+        container.innerHTML = '<p class="text-gray-500 text-center py-8">No trades yet</p>';
+        return;
+      }
+      
+      let html = '';
+      
+      // Show open positions first
+      openPositions.slice().reverse().forEach(pos => {
+        html += `
+          <div class="trade-row trade-buy">
+            <div>
+              <span class="positive font-bold">BUY</span> ${pos.symbol}
+              <div class="text-sm text-gray-400">Strategy: ${pos.strategy}</div>
+              <div class="text-xs text-gray-500">SL: $${pos.stopLoss.toFixed(2)} | TP: $${pos.takeProfit.toFixed(2)}</div>
+            </div>
+            <div class="text-right">
+              <div>$${pos.amount.toFixed(2)}</div>
+              <div class="text-sm text-yellow-400">Open</div>
+            </div>
+          </div>
+        `;
+      });
+      
+      // Show closed trades
+      closedTrades.slice(-5).reverse().forEach(trade => {
+        const isWin = trade.pnl >= 0;
+        const change = ((trade.exitPrice / trade.entryPrice - 1) * 100).toFixed(1);
+        html += `
+          <div class="trade-row trade-sell">
+            <div>
+              <span class="${isWin ? 'positive' : 'negative'} font-bold">${isWin ? 'PROFIT' : 'LOSS'}</span> ${trade.symbol}
+              <div class="text-sm text-gray-400">Strategy: ${trade.strategy}</div>
+            </div>
+            <div class="text-right">
+              <div class="${isWin ? 'positive' : 'negative'}">${isWin ? '+' : ''}$${Math.abs(trade.pnl).toFixed(2)}</div>
+              <div class="text-sm ${isWin ? 'positive' : 'negative'}">${isWin ? '+' : ''}${change}%</div>
+            </div>
+          </div>
+        `;
+      });
+      
+      container.innerHTML = html;
+      document.getElementById('tradesUpdated').textContent = 'Updated: ' + new Date().toLocaleTimeString();
+    }
+    
+    function updateStrategiesDisplay() {
+      let html = '';
+      strategies.forEach(strat => {
+        html += `
+          <div class="strategy-card">
+            <div class="flex justify-between items-center">
+              <span style="color: ${strat.color}">${strat.name}</span>
+              <span class="text-sm">${(strat.allocation * 100).toFixed(0)}%</span>
+            </div>
+            <div class="mt-2 bg-gray-800 rounded-full h-2">
+              <div class="h-2 rounded-full" style="width: ${strat.allocation * 100}%; background: ${strat.color}"></div>
+            </div>
+          </div>
+        `;
+      });
+      
+      html += `
+        <div class="mt-4 pt-4 border-t border-gray-700">
+          <div class="stat-row">
+            <span class="stat-label">Total Allocated</span>
+            <span>100%</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">Commission Rate</span>
+            <span class="text-yellow-400">0.1%</span>
+          </div>
+        </div>
+      `;
+      
+      document.getElementById('activeStrategies').innerHTML = html;
+    }
+    
+    function updateRiskMetrics() {
+      const exposure = openPositions.length * 0.12; // ~12% per position
+      const dailyLoss = dailyPnl < 0 ? Math.abs(dailyPnl) : 0;
+      const riskLevel = dailyLoss > 300 ? 'HIGH 🔴' : dailyLoss > 100 ? 'MEDIUM 🟡' : 'LOW 🟢';
+      const circuitStatus = dailyLoss > 500 ? 'TRIGGERED 🚨' : 'Ready ✅';
+      
+      // Calculate total commission paid
+      let totalComm = 0;
+      openPositions.forEach(pos => { if (pos.entryCommission) totalComm += pos.entryCommission; });
+      closedTrades.forEach(trade => { 
+        if (trade.entryCommission) totalComm += trade.entryCommission;
+        if (trade.exitCommission) totalComm += trade.exitCommission;
+      });
+      
+      document.getElementById('riskMetrics').innerHTML = `
+        <div class="stat-row">
+          <span class="stat-label">Risk Level</span>
+          <span class="${dailyLoss > 300 ? 'negative' : dailyLoss > 100 ? 'text-yellow-400' : 'positive'}">${riskLevel}</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Daily Loss</span>
+          <span class="${dailyLoss > 0 ? 'negative' : ''}">$${dailyLoss.toFixed(2)} / $500</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Circuit Breaker</span>
+          <span class="${dailyLoss > 500 ? 'negative' : 'positive'}">${circuitStatus}</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Exposure</span>
+          <span>${(exposure * 100).toFixed(1)}%</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Total Commission (0.1%)</span>
+          <span class="text-yellow-400">$${totalComm.toFixed(2)}</span>
+        </div>
+      `;
+    }
+    
+    // Initialize on load
+    document.addEventListener('DOMContentLoaded', function() {
+      initChart();
+    });
+  </script>
+</body>
+</html>
