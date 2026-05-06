@@ -1,122 +1,173 @@
-# Project Starter
+# Michael's Crypto Trading Bot 🤖📈
 
-This is the starter template for ElizaOS projects.
+An AI-powered crypto trading agent with live Binance paper trading, 14 multi-strategy management, real-time analytics dashboard, and sentiment analysis.
 
-## Features
+> Built as an ElizaOS plugin → standalone Node.js trading API server.
 
-- Pre-configured project structure for ElizaOS development
-- Comprehensive testing setup with component and e2e tests
-- Default character configuration with plugin integration
-- Example service, action, and provider implementations
-- TypeScript configuration for optimal developer experience
-- Built-in documentation and examples
+---
 
-## Getting Started
+## 🚀 Quick Start
+
+### 1. Start the API Server
 
 ```bash
-# Create a new project
-elizaos create --type project my-project
-# Dependencies are automatically installed and built
-
-# Navigate to the project directory
-cd my-project
-
-# Start development immediately
-elizaos dev
+cd michael-trading-agent
+node trading-api.cjs
 ```
 
-## Development
+Server runs on **http://localhost:3002**
+
+### 2. Open the Dashboard
 
 ```bash
-# Start development with hot-reloading (recommended)
-elizaos dev
-
-# OR start without hot-reloading
-elizaos start
-# Note: When using 'start', you need to rebuild after changes:
-# bun run build
-
-# Test the project
-elizaos test
+open dashboard-live.html
 ```
 
-## Testing
+Or open `dashboard-FINAL-20260505.html` for the latest version.
 
-ElizaOS employs a dual testing strategy:
+---
 
-1. **Component Tests** (`src/__tests__/*.test.ts`)
+## 📊 Features
 
-   - Run with Bun's native test runner
-   - Fast, isolated tests using mocks
-   - Perfect for TDD and component logic
+### Trading Strategies (14 total)
 
-2. **E2E Tests** (`src/__tests__/e2e/*.e2e.ts`)
-   - Run with ElizaOS custom test runner
-   - Real runtime with actual database (PGLite)
-   - Test complete user scenarios
+| Strategy | Description |
+|----------|-------------|
+| `momentum-breakout` | Volume + momentum + trend confirmation (ElizaOS original) |
+| `mean-reversion` | RSI + Bollinger Bands + support/resistance (ElizaOS original) |
+| `rule-based` | Configurable rules with RSI/MACD/SMA (ElizaOS original) |
+| `random` | Random entries with risk management (ElizaOS original) |
+| `momentum` | RSI + momentum + MACD combined |
+| `mean-reversion-simple` | Simplified RSI + Bollinger |
+| `grid` | Grid zones — buy low, sell high |
+| `dca` | Dollar cost averaging |
+| `trend-following` | EMA crossover (12/26/50) |
+| `scalp` | Fast RSI for quick trades |
+| `breakout` | Volume + price breakout detection |
+| `mixed` | Combines all strategies (majority vote) |
+| `llm` | Simulated AI decisions (consensus + randomness) |
 
-### Test Structure
+### Technical Indicators
+- SMA, EMA (9, 21, 50, 200)
+- RSI (5, 14 period)
+- MACD (12/26/9)
+- Bollinger Bands (20, 2 std dev)
+- ATR (Average True Range)
+- Volume ratio analysis
+- Momentum scoring
+
+### Safety Controls
+- **Stop Loss:** -5% per trade
+- **Take Profit:** +15% per trade
+- **Trading Fee:** 0.1% per trade (Binance equivalent)
+- **Starting Balance:** $500 (paper trading)
+- **No trade cap:** unlimited trading
+
+---
+
+## 🛠️ API Endpoints
+
+### GET /api/status
+Full system status — portfolio, positions, trades, signals, prices.
+
+### GET /api/strategies
+List all available strategies with descriptions.
+
+### POST /api/auto/start
+```json
+{"strategy": "momentum-breakout"}
+```
+Start auto-trading with a specific strategy.
+
+### POST /api/auto/stop
+Stop auto-trading.
+
+### POST /api/buy
+```json
+{"token": "BTC", "percent": 15}
+```
+Manual buy (percentage of balance).
+
+### POST /api/sell
+```json
+{"token": "BTC", "percent": 100}
+```
+Manual sell (percentage of position).
+
+### POST /api/reset
+Reset portfolio to $500 starting balance.
+
+---
+
+## 📁 Project Structure
 
 ```
-src/
-  __tests__/              # All tests live inside src
-    *.test.ts            # Component tests (use Bun test runner)
-    e2e/                 # E2E tests (use ElizaOS test runner)
-      project-starter.e2e.ts  # E2E test suite
-      README.md          # E2E testing documentation
-  index.ts               # Export tests here: tests: [ProjectStarterTestSuite]
+michael-trading-agent/
+├── trading-api.cjs          # Standalone trading API server (Node.js)
+├── dashboard-live.html      # Live trading dashboard
+├── dashboard-FINAL-20260505.html  # Latest dashboard version
+├── trading-state.json       # Persistent trading state (git-ignored)
+├── .env                     # Environment variables (git-ignored)
+├── package.json
+├── src/
+│   ├── plugins/
+│   │   ├── strategies/      # Trading strategy implementations
+│   │   ├── services/        # Trading services (Swap, Sentiment, etc.)
+│   │   └── types/           # TypeScript type definitions
+│   └── frontend/
+│       └── components/       # React dashboard components
+├── dist/                    # Compiled output
+└── scripts/                 # Build and test scripts
 ```
 
-### Running Tests
+---
 
-- `elizaos test` - Run all tests (component + e2e)
-- `elizaos test component` - Run only component tests
-- `elizaos test e2e` - Run only E2E tests
+## 🔧 Configuration
 
-### Writing Tests
+Edit `trading-api.cjs` top section to adjust:
 
-Component tests use bun:test:
-
-```typescript
-// Unit test example (__tests__/config.test.ts)
-describe('Configuration', () => {
-  it('should load configuration correctly', () => {
-    expect(config.debug).toBeDefined();
-  });
-});
-
-// Integration test example (__tests__/integration.test.ts)
-describe('Integration: Plugin with Character', () => {
-  it('should initialize character with plugins', async () => {
-    // Test interactions between components
-  });
-});
+```javascript
+const STATE_FILE = './trading-state.json';
+const PORT = 3002;
+const STARTING_BALANCE = 500;
+const TRADING_FEE = 0.001;        // 0.1%
+const AUTO_TRADE_INTERVAL = 30000; // 30 seconds
+const STOP_LOSS_PERCENT = 0.05;    // 5%
+const TAKE_PROFIT_PERCENT = 0.15;  // 15%
 ```
 
-E2E tests use ElizaOS test interface:
+---
 
-```typescript
-// E2E test example (e2e/project.test.ts)
-export class ProjectTestSuite implements TestSuite {
-  name = 'project_test_suite';
-  tests = [
-    {
-      name: 'project_initialization',
-      fn: async (runtime) => {
-        // Test project in a real runtime
-      },
-    },
-  ];
-}
+## 📈 Dashboard Overview
 
-export default new ProjectTestSuite();
+The dashboard shows:
+- **Portfolio value** + total return %
+- **Open positions** with entry price, current price, PnL
+- **Strategy performance** table (trades, win rate, net PnL per strategy)
+- **All signals** — what each strategy is recommending for each token
+- **Fear/Greed indices** per token
+- **Trade history** (last 50 trades)
+- **Extended stats** — largest win, largest loss, max consecutive wins
+
+---
+
+## 🧪 Testing
+
+```bash
+bun run test              # Run all tests
+bun run test:component    # Component tests only
+bun run test:e2e          # E2E tests only
 ```
 
-The test utilities in `__tests__/utils/` provide helper functions to simplify writing tests.
+---
 
-## Configuration
+## 📝 Notes
 
-Customize your project by modifying:
+- Paper trading only — no real funds
+- Price data from CoinGecko (with fallback simulation)
+- State persists in `trading-state.json`
+- ElizaOS `.eliza/` database files are not committed
 
-- `src/index.ts` - Main entry point
-- `src/character.ts` - Character definition
+---
+
+Built with 🪷 by Subhuti for Michael's trading adventures.
