@@ -1,0 +1,14 @@
+# Bun binary (oversized)
+node_modules/bun/bin/bun.exe
+
+# Temp / OS
+.DS_Store
+*.log
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# State files (personal)
+trading-state.json
+.env
