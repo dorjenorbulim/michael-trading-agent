@@ -185,4 +185,19 @@ curl -X POST http://localhost:3002/api/buy -H "Content-Type: application/json" -
 
 ---
 
+## 🍴 Fork & Contribute
+
+Ideas, improvements, and better versions are welcome! If you build something interesting, feel free to open an issue or PR.
+
+**Discussion thread:** https://github.com/dorjenorbulim/michael-trading-agent/issues/1
+
+### Ideas worth exploring:
+- Add more strategies (Elliott Wave, Ichimoku, etc.)
+- Connect to real Binance API for live trading
+- Multi-agent coordination (one scanner, one executor, one risk manager)
+- Backtesting module
+- Performance analytics with charts
+
+---
+
 Built with 🪷 by Subhuti for Michael's trading adventures.
