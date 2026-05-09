@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Michael's Trading Crew — Command Center</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: 'Inter', system-ui, sans-serif; background: #080c14; color: #f1f5f9; }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+    .card { background: #0f172a; border: 1px solid #1e293b; border-radius: 10px; }
+    .card:hover { border-color: #334155; }
+    .signal-BUY { color: #10b981; }
+    .signal-SELL { color: #ef4444; }
+    .signal-HOLD { color: #64748b; }
+    @keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:0.4} }
+    .pulse { animation: pulse-dot 2s ease-in-out infinite; }
+    @keyframes slideIn { from{opacity:0;transform:translateY(-4px)} to{opacity:1;transform:translateY(0)} }
+    .slide-in { animation: slideIn 0.25s ease-out; }
+    @keyframes newToken { 0%{background:#1e3a5f} 50%{background:#1e40af} 100%{background:#0f172a} }
+    .new-token { animation: newToken 2s ease-out; }
+    .pnl-pos { color: #10b981; }
+    .pnl-neg { color: #ef4444; }
+    .badge { padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; }
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; padding: 4px 8px; font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: #475569; border-bottom: 1px solid #1e293b; }
+    td { padding: 5px 8px; font-size: 12px; border-bottom: 1px solid #1e293b; }
+    tr:hover td { background: #1a2538; }
+    .glow-green { box-shadow: 0 0 12px #10b98150; }
+    .glow-red { box-shadow: 0 0 12px #ef444450; }
+    .auto-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .divider { height: 1px; background: linear-gradient(to right, transparent, #334155, transparent); }
+  </style>
+</head>
+<body class="min-h-screen p-4">
+
+<!-- ═══ HEADER ═══════════════════════════════════════════ -->
+<div class="flex items-center justify-between mb-4">
+  <div class="flex items-center gap-3">
+    <div class="text-2xl">🚂</div>
+    <div>
+      <h1 class="text-lg font-bold tracking-tight">Trading Crew</h1>
+      <p class="text-xs text-slate-500">Command Center <span class="text-slate-700">·</span> <span id="modeLabel">Paper Trading</span></p>
+    </div>
+  </div>
+  <div class="flex items-center gap-5">
+    <!-- SG Clock -->
+    <div class="text-right">
+      <div class="mono text-base font-bold" id="timeDisplay">--:--:--</div>
+      <div class="text-xs text-slate-500" id="dateDisplay">---</div>
+    </div>
+    <!-- Status row -->
+    <div class="flex items-center gap-4 text-xs">
+      <div class="flex items-center gap-1.5">
+        <span id="apiDot" class="auto-dot bg-slate-600"></span>
+        <span class="text-slate-500">API</span>
+      </div>
+      <div class="flex items-center gap-1.5">
+        <span id="crewDot" class="auto-dot bg-slate-600"></span>
+        <span class="text-slate-500">Crew</span>
+      </div>
+      <div class="flex items-center gap-1.5">
+        <span id="autoDot" class="auto-dot bg-slate-600"></span>
+        <span class="text-slate-500">Auto</span>
+      </div>
+      <span id="autoBadge" class="badge bg-yellow-900 text-yellow-400">MANUAL</span>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MAIN GRID ══════════════════════════════════════════ -->
+<div class="grid grid-cols-12 gap-3">
+
+<!-- COL 1: Portfolio + Positions + History (narrow) -->
+<div class="col-span-3 space-y-3">
+
+  <!-- Portfolio Summary -->
+  <div class="card p-4">
+    <h2 class="text-xs font-bold uppercase tracking-widest text-slate-500 mb-3">Portfolio</h2>
+    <div class="space-y-2 text-sm">
+      <div class="flex justify-between items-center">
+        <span class="text-slate-400">Balance</span>
+        <span class="mono font-bold" id="balance">—</span>
+      </div>
+      <div class="flex justify-between items-center">
+        <span class="text-slate-400">Positions</span>
+        <span class="mono text-slate-300" id="positionsValue">—</span>
+      </div>
+      <div class="divider my-1"></div>
+      <div class="flex justify-between items-center">
+        <span class="text-white font-semibold">Total</span>
+        <span class="mono font-bold text-base" id="totalValue">—</span>
+      </div>
+      <div class="flex justify-between items-center">
+        <span class="text-slate-400">Daily P&L</span>
+        <span class="mono text-sm" id="dailyPnL">—</span>
+      </div>
+      <div class="flex justify-between items-center">
+        <span class="text-slate-400">All-time P&L</span>
+        <span class="mono text-sm" id="totalPnL">—</span>
+      </div>
+      <div class="flex justify-between items-center">
+        <span class="text-slate-400">Win Rate</span>
+        <span class="mono text-sm text-cyan-400" id="winRate">—</span>
+      </div>
+      <div class="flex justify-between items-center">
+        <span class="text-slate-400">Trades</span>
+        <span class="mono text-sm" id="tradesToday">—</span>
+      </div>
+      <div class="flex justify-between items-center">
+        <span class="text-slate-400">Fees Paid</span>
+        <span class="mono text-sm text-slate-400" id="totalFees">—</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Open Positions -->
+  <div class="card p-4">
+    <h2 class="text-xs font-bold uppercase tracking-widest text-slate-500 mb-3">Positions</h2>
+    <div id="positionsPanel" class="space-y-1.5">
+      <div class="text-center text-slate-600 text-xs py-6">No positions</div>
+    </div>
+  </div>
+
+  <!-- Trade History -->
+  <div class="card p-4">
+    <h2 class="text-xs font-bold uppercase tracking-widest text-slate-500 mb-2">Recent Trades</h2>
+    <div id="tradeHistory" class="space-y-0.5 max-h-60 overflow-y-auto">
+      <div class="text-center text-slate-600 text-xs py-6">No trades yet</div>
+    </div>
+  </div>
+</div>
+
+<!-- COL 2: Prices + Signals + Strategy Perf (wide) -->
+<div class="col-span-5 space-y-3">
+
+  <!-- Live Prices — Dynamic Token Grid -->
+  <div class="card p-4">
+    <div class="flex justify-between items-center mb-3">
+      <h2 class="text-xs font-bold uppercase tracking-widest text-slate-500">Prices</h2>
+      <div class="flex items-center gap-1.5">
+        <span class="w-2 h-2 rounded-full bg-green-500 pulse"></span>
+        <span class="text-xs text-slate-500">Live</span>
+      </div>
+    </div>
+    <div id="pricesGrid" class="grid gap-2" style="grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));">
+      <!-- Dynamic -->
+    </div>
+  </div>
+
+  <!-- Signals Matrix — Dynamic -->
+  <div class="card p-4">
+    <div class="flex justify-between items-center mb-3">
+      <h2 class="text-xs font-bold uppercase tracking-widest text-slate-500">Signals</h2>
+      <span id="signalCount" class="text-xs text-slate-600">—</span>
+    </div>
+    <div id="signalsContainer" class="space-y-1">
+      <div class="text-center text-slate-600 text-xs py-4">Loading signals...</div>
+    </div>
+  </div>
+
+  <!-- Strategy Performance -->
+  <div class="card p-4">
+    <h2 class="text-xs font-bold uppercase tracking-widest text-slate-500 mb-3">Strategy Performance</h2>
+    <div class="overflow-x-auto">
+      <table>
+        <thead>
+          <tr>
+            <th>Strategy</th>
+            <th class="text-center">Trades</th>
+            <th class="text-center">Win%</th>
+            <th class="text-right">Net P&L</th>
+          </tr>
+        </thead>
+        <tbody id="strategyPerfBody">
+          <tr><td colspan="4" class="text-center text-slate-600 text-xs py-3">No data</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Crew Activity -->
+  <div class="card p-4">
+    <h2 class="text-xs font-bold uppercase tracking-widest text-slate-500 mb-2">Crew Activity</h2>
+    <div id="activityFeed" class="space-y-1 max-h-36 overflow-y-auto">
+      <div class="text-center text-slate-600 text-xs py-3">No recent activity</div>
+    </div>
+  </div>
+</div>
+
+<!-- COL 3: Notifications + Stats + Controls + Crew (narrow) -->
+<div class="col-span-4 space-y-3">
+
+  <!-- Notification Feed -->
+  <div class="card p-4">
+    <div class="flex justify-between items-center mb-3">
+      <h2 class="text-xs font-bold uppercase tracking-widest text-slate-500">📡 Notifications</h2>
+      <span id="notifCount" class="badge bg-slate-800 text-slate-400">0</span>
+    </div>
+    <div id="notificationLog" class="space-y-1.5 max-h-64 overflow-y-auto">
+      <div class="text-center text-slate-600 text-xs py-4">No notifications</div>
+    </div>
+  </div>
+
+  <!-- Extended Stats -->
+  <div class="card p-4">
+    <h2 class="text-xs font-bold uppercase tracking-widest text-slate-500 mb-3">Stats</h2>
+    <div class="grid grid-cols-2 gap-3 text-xs">
+      <div>
+        <div class="text-slate-500 mb-0.5">Largest Win</div>
+        <div class="mono text-sm pnl-pos" id="largestWin">—</div>
+      </div>
+      <div>
+        <div class="text-slate-500 mb-0.5">Largest Loss</div>
+        <div class="mono text-sm pnl-neg" id="largestLoss">—</div>
+      </div>
+      <div>
+        <div class="text-slate-500 mb-0.5">Best Strategy</div>
+        <div class="mono text-sm text-emerald-400" id="bestStrategy">—</div>
+      </div>
+      <div>
+        <div class="text-slate-500 mb-0.5">Worst Strategy</div>
+        <div class="mono text-sm text-red-400" id="worstStrategy">—</div>
+      </div>
+      <div>
+        <div class="text-slate-500 mb-0.5">Consec Wins</div>
+        <div class="mono text-sm text-cyan-400" id="maxConsecWins">—</div>
+      </div>
+      <div>
+        <div class="text-slate-500 mb-0.5">Consec Losses</div>
+        <div class="mono text-sm text-amber-400" id="maxConsecLosses">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div class="card p-4 space-y-3">
+    <h2 class="text-xs font-bold uppercase tracking-widest text-slate-500">Controls</h2>
+    <div class="grid grid-cols-3 gap-2">
+      <button id="btnStartAuto" class="bg-emerald-900 hover:bg-emerald-800 border border-emerald-700 text-emerald-400 font-bold py-2 rounded-lg text-xs">▶ AUTO</button>
+      <button id="btnStopAuto" class="bg-red-900 hover:bg-red-800 border border-red-700 text-red-400 font-bold py-2 rounded-lg text-xs">⏹ STOP</button>
+      <button id="btnReset" class="bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-300 font-bold py-2 rounded-lg text-xs">↺ RESET</button>
+    </div>
+    <div>
+      <label class="text-xs text-slate-500 block mb-1">Strategy</label>
+      <select id="strategySelect" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none">
+        <option value="mixed">Mixed (All)</option>
+        <option value="momentum-breakout">Momentum</option>
+        <option value="mean-reversion">Mean Reversion</option>
+        <option value="trend-following">Trend Following</option>
+        <option value="scalp">Scalping</option>
+        <option value="dca">DCA</option>
+        <option value="grid">Grid</option>
+      </select>
+    </div>
+    <div>
+      <label class="text-xs text-slate-500 block mb-1">Manual Trade</label>
+      <div class="flex gap-2">
+        <select id="manualToken" class="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-xs w-16">
+          <option value="">Token</option>
+        </select>
+        <input id="manualAmount" type="number" placeholder="%" min="1" max="100" class="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-xs w-16">
+        <button id="btnBuy" class="bg-green-900 hover:bg-green-800 text-green-400 font-bold py-1.5 px-3 rounded text-xs">BUY</button>
+        <button id="btnSell" class="bg-red-900 hover:bg-red-800 text-red-400 font-bold py-1.5 px-3 rounded text-xs">SELL</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Crew Status -->
+  <div class="card p-4">
+    <h2 class="text-xs font-bold uppercase tracking-widest text-slate-500 mb-3">Crew</h2>
+    <div class="space-y-1.5 text-xs">
+      <div class="flex justify-between items-center">
+        <span class="text-slate-400">📊 Market Agent</span>
+        <span id="marketStatus" class="text-slate-500">idle</span>
+      </div>
+      <div class="flex justify-between items-center">
+        <span class="text-slate-400">⚙️ Trade Agent</span>
+        <span id="tradeStatus" class="text-slate-500">idle</span>
+      </div>
+      <div class="flex justify-between items-center">
+        <span class="text-slate-400">🔭 Researcher</span>
+        <span id="researcherStatus" class="text-slate-500">idle</span>
+      </div>
+      <div class="flex justify-between items-center">
+        <span class="text-slate-400">👁️ Sentinel</span>
+        <span id="sentinelStatus" class="text-slate-500">idle</span>
+      </div>
+      <div class="flex justify-between items-center">
+        <span class="text-slate-400">🧠 Strategist</span>
+        <span id="strategistStatus" class="text-slate-500">idle</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Channels -->
+  <div class="card p-4">
+    <h2 class="text-xs font-bold uppercase tracking-widest text-slate-500 mb-2">Channels</h2>
+    <div class="space-y-1.5 text-xs">
+      <div class="flex justify-between items-center">
+        <span class="text-slate-400">📱 Telegram</span>
+        <span id="telegramStatus" class="text-slate-500">—</span>
+      </div>
+      <div class="flex justify-between items-center">
+        <span class="text-slate-400">💬 Discord</span>
+        <span id="discordStatus" class="text-slate-500">—</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<!-- ═══ FOOTER ════════════════════════════════════════════ -->
+<div class="text-center text-slate-700 text-xs mono mt-4">
+  OpenClaw Trading Crew · Auto-trading via Cron Agents · Binance Testnet
+</div>
+
+<script>
+const API = 'http://localhost:3002';
+const CORE_TOKENS = ['BTC', 'ETH', 'SOL'];
+
+// ── State ───────────────────────────────────────────────
+let allTokens = [...CORE_TOKENS];
+let lastPrices = {};
+let notifications = [];
+let newTokens = new Set();
+
+// ── Clock ───────────────────────────────────────────────
+function updateClock() {
+  const now = new Date();
+  const sg = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Singapore' }));
+  document.getElementById('timeDisplay').textContent = sg.toLocaleTimeString('en-GB');
+  document.getElementById('dateDisplay').textContent = sg.toLocaleDateString('en-GB', { weekday: 'short', day: '2-digit', month: 'short' });
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// ── Fetch ───────────────────────────────────────────────
+async function fetchStatus() {
+  try {
+    const res = await fetch(API + '/api/status');
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    document.getElementById('apiDot').className = 'auto-dot bg-green-500 pulse';
+    updateAll(data);
+  } catch {
+    document.getElementById('apiDot').className = 'auto-dot bg-red-500 pulse';
+  }
+}
+
+function updateAll(data) {
+  discoverTokens(data);
+  updatePortfolio(data);
+  updatePricesGrid();
+  updateSignals(data.signals);
+  updatePositions(data.positions || []);
+  updateTradeHistory(data.trades || []);
+  updateStrategyPerf(data.strategyPerformance || []);
+  updateExtendedStats(data.extendedStats || {});
+  updateActivity(data);
+  updateAutoStatus(data.autoTrading);
+  updateConfigStatus();
+  updateManualTokenSelect();
+}
+
+// ── Token Discovery ─────────────────────────────────────
+function discoverTokens(data) {
+  const positions = data.positions || [];
+  const trades = data.trades || [];
+
+  // Add tokens from positions
+  positions.forEach(p => {
+    const t = p.symbol || p.token;
+    if (t && !allTokens.includes(t)) {
+      allTokens.push(t);
+      newTokens.add(t);
+    }
+  });
+
+  // Add tokens from recent trades
+  trades.slice(-20).forEach(t => {
+    const tok = t.token;
+    if (tok && !allTokens.includes(tok)) {
+      allTokens.push(tok);
+      newTokens.add(tok);
+    }
+  });
+
+  // Remove new-token highlight after 3s
+  setTimeout(() => { newTokens.clear(); }, 3000);
+}
+
+// ── Portfolio ────────────────────────────────────────────
+function updatePortfolio(data) {
+  const p = data.portfolio || {};
+  const balance = parseFloat(p.balance || 500);
+  const posVal = (data.positions || []).reduce((s, p) => s + parseFloat(p.value || 0), 0);
+  const total = balance + posVal;
+  const startBalance = 500;
+  const dailyPnL = total - startBalance;
+  const dailyPct = (dailyPnL / startBalance * 100).toFixed(2);
+  const allTrades = data.trades || [];
+  const wins = allTrades.filter(t => parseFloat(t.pnl || 0) > 0).length;
+  const winRate = allTrades.length > 0 ? (wins / allTrades.length * 100).toFixed(1) : '0.0';
+  const totalFees = (allTrades.reduce((s, t) => s + parseFloat(t.fee || 0), 0)).toFixed(2);
+
+  document.getElementById('balance').textContent = '$' + balance.toFixed(2);
+  document.getElementById('positionsValue').textContent = '$' + posVal.toFixed(2);
+  document.getElementById('totalValue').innerHTML = `<span class="${total >= startBalance ? 'pnl-pos' : 'pnl-neg'}">$${total.toFixed(2)}</span>`;
+  document.getElementById('dailyPnL').innerHTML = `<span class="${dailyPnL >= 0 ? 'pnl-pos' : 'pnl-neg'}">${dailyPnL >= 0 ? '+' : ''}$${dailyPnL.toFixed(2)} (${dailyPnL >= 0 ? '+' : ''}${dailyPct}%)</span>`;
+  const totalPnl = allTrades.reduce((s, t) => s + parseFloat(t.pnl || 0), 0);
+  document.getElementById('totalPnL').innerHTML = `<span class="${totalPnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}</span>`;
+  document.getElementById('winRate').textContent = winRate + '%';
+  document.getElementById('tradesToday').textContent = `${data.autoTrading?.tradesToday || 0}/30`;
+  document.getElementById('totalFees').textContent = '$' + totalFees;
+}
+
+// ── Prices Grid ──────────────────────────────────────────
+function updatePricesGrid() {
+  const grid = document.getElementById('pricesGrid');
+  grid.style.gridTemplateColumns = `repeat(${Math.min(allTokens.length, 6)}, 1fr)`;
+  let html = '';
+
+  allTokens.forEach(t => {
+    const p = lastPrices[t] || {};
+    const price = p.price || 0;
+    const change = p.change24h || 0;
+    const isNew = newTokens.has(t);
+    const isCore = CORE_TOKENS.includes(t);
+    const cls = change > 0 ? 'border-emerald-800 bg-emerald-950' : change < 0 ? 'border-red-800 bg-red-950' : 'border-slate-800 bg-slate-900';
+    const priceColor = change > 0 ? 'text-emerald-400' : change < 0 ? 'text-red-400' : 'text-slate-300';
+
+    html += `
+      <div class="rounded-lg p-3 border ${cls} ${isNew ? 'new-token' : ''} text-center">
+        <div class="flex items-center justify-center gap-1 mb-1">
+          <span class="text-xs font-bold text-slate-300">${t}</span>
+          ${isNew ? '<span class="text-[8px] bg-blue-600 text-white px-1 rounded">NEW</span>' : ''}
+          ${!isCore && CORE_TOKENS.includes(t) === false ? '<span class="text-[8px] bg-slate-700 text-slate-400 px-1 rounded">+</span>' : ''}
+        </div>
+        <div class="mono font-bold ${priceColor} text-sm">${price ? '$' + price.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '—'}</div>
+        <div class="mono text-xs ${change >= 0 ? 'text-emerald-500' : 'text-red-500'}">${change > 0 ? '+' : ''}${change.toFixed(2)}%</div>
+      </div>
+    `;
+  });
+  grid.innerHTML = html;
+}
+
+// ── Signals ─────────────────────────────────────────────
+const STRATS_TO_SHOW = ['momentum-breakout', 'mean-reversion', 'trend-following', 'scalp', 'dca', 'grid', 'mixed'];
+
+function updateSignals(signals) {
+  const container = document.getElementById('signalsContainer');
+  if (!signals) {
+    container.innerHTML = '<div class="text-center text-slate-600 text-xs py-4">No signals available</div>';
+    return;
+  }
+
+  // Build list of tokens that have signal data
+  const signalTokens = Object.keys(signals).filter(t => {
+    // Include if in allTokens or has any non-HOLD signal
+    return allTokens.includes(t) || Object.values(signals[t] || {}).some(s => s !== 'HOLD');
+  });
+
+  document.getElementById('signalCount').textContent = `${signalTokens.length} tokens × ${STRATS_TO_SHOW.length} strategies`;
+
+  let html = `
+    <div class="flex gap-1 text-[9px] uppercase tracking-wider text-slate-600 mb-1 pl-1">
+      <div class="w-12 shrink-0"></div>
+      ${signalTokens.map(t => `<div class="flex-1 text-center">${t}</div>`).join('')}
+    </div>
+  `;
+
+  STRATS_TO_SHOW.forEach(strat => {
+    html += `<div class="flex gap-1 items-center">`;
+    html += `<div class="w-12 shrink-0 text-[9px] text-slate-500 truncate">${strat.replace(/-/g, ' ')}</div>`;
+    signalTokens.forEach(t => {
+      const sig = signals?.[t]?.[strat] || 'HOLD';
+      const cls = sig === 'BUY' ? 'signal-BUY' : sig === 'SELL' ? 'signal-SELL' : 'signal-HOLD';
+      const bg = sig === 'BUY' ? 'bg-emerald-900' : sig === 'SELL' ? 'bg-red-900' : 'bg-slate-800';
+      html += `<div class="flex-1 text-center"><span class="mono text-[10px] font-bold ${cls} ${bg} rounded px-1 py-0.5">${sig}</span></div>`;
+    });
+    html += `</div>`;
+  });
+
+  container.innerHTML = html;
+}
+
+// ── Positions ───────────────────────────────────────────
+function updatePositions(positions) {
+  const panel = document.getElementById('positionsPanel');
+  if (!positions || positions.length === 0) {
+    panel.innerHTML = '<div class="text-center text-slate-600 text-xs py-6">No positions</div>';
+    return;
+  }
+  panel.innerHTML = positions.map(pos => {
+    const pnl = parseFloat(pos.pnl || 0);
+    const pct = parseFloat(pos.pnlPercent || 0);
+    const pnlCls = pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
+    return `
+      <div class="flex justify-between items-center bg-slate-900 rounded-lg px-3 py-2 border border-slate-800 hover:border-slate-700">
+        <div class="flex items-center gap-2">
+          <span class="font-bold text-xs text-white">${pos.symbol || pos.token}</span>
+          <span class="mono text-xs text-slate-500">${parseFloat(pos.amount || 0).toFixed(4)}</span>
+        </div>
+        <div class="text-right">
+          <div class="mono text-xs ${pnlCls}">$${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}</div>
+          <div class="mono text-xs ${pnlCls}">${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// ── Trade History ────────────────────────────────────────
+function updateTradeHistory(trades) {
+  const panel = document.getElementById('tradeHistory');
+  if (!trades || trades.length === 0) {
+    panel.innerHTML = '<div class="text-center text-slate-600 text-xs py-6">No trades yet</div>';
+    return;
+  }
+  panel.innerHTML = trades.slice(-15).reverse().map(t => {
+    const pnl = parseFloat(t.pnl || 0);
+    const sideCls = t.type === 'BUY' ? 'text-blue-400' : pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
+    const sideSym = t.type === 'BUY' ? '▲' : '▼';
+    const time = new Date(t.date || Date.now()).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    const pnlStr = t.pnl != null ? `<span class="${pnl >= 0 ? 'pnl-pos' : 'pnl-neg'} mono text-[10px]">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</span>` : '';
+    const srcBadge = t.source ? \`<span class="text-[8px] px-1 rounded bg-slate-800 text-slate-500">\${t.source}</span>\` : '';
+    return `
+      <div class="flex justify-between items-center py-1 border-b border-slate-800/50 hover:bg-slate-900 rounded px-1">
+        <div class="flex items-center gap-1.5">
+          <span class="${sideCls} font-bold text-[10px]">${sideSym}</span>
+          <span class="text-[11px] font-semibold">${t.token || '?'}</span>
+          <span class="mono text-[10px] text-slate-500">$${(parseFloat(t.price) || 0).toFixed(0)}</span>
+        </div>
+        <div class="flex items-center gap-1.5">
+          ${srcBadge}
+          ${pnlStr}
+          <span class="mono text-[10px] text-slate-600">${time}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// ── Strategy Perf ────────────────────────────────────────
+function updateStrategyPerf(perf) {
+  const tbody = document.getElementById('strategyPerfBody');
+  if (!perf || perf.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="4" class="text-center text-slate-600 text-xs py-3">No strategy data</td></tr>';
+    return;
+  }
+  tbody.innerHTML = perf.map(s => {
+    const pnl = parseFloat(s.net ?? s.pnl ?? 0);
+    const pnlCls = pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
+    return `
+      <tr>
+        <td class="text-slate-300 text-xs font-medium">${s.name || '?'}</td>
+        <td class="text-center mono text-xs text-slate-400">${s.trades || 0}</td>
+        <td class="text-center mono text-xs text-cyan-400">${s.winRate || 0}%</td>
+        <td class="text-right mono text-xs ${pnlCls}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+// ── Extended Stats ──────────────────────────────────────
+function updateExtendedStats(ext) {
+  document.getElementById('largestWin').textContent = ext.largestWin > 0 ? '+$' + ext.largestWin.toFixed(2) : '—';
+  document.getElementById('largestLoss').textContent = ext.largestLoss < 0 ? '-$' + Math.abs(ext.largestLoss).toFixed(2) : '—';
+  document.getElementById('maxConsecWins').textContent = ext.maxConsecWins || '—';
+  document.getElementById('maxConsecLosses').textContent = ext.maxConsecLosses || '—';
+  document.getElementById('bestStrategy').textContent = ext.bestStrategy || '—';
+  document.getElementById('worstStrategy').textContent = ext.worstStrategy || '—';
+}
+
+// ── Crew Activity ────────────────────────────────────────
+function updateActivity(data) {
+  const feed = document.getElementById('activityFeed');
+  const acts = data.activities || [];
+  const recent = acts.slice(0, 10);
+  if (recent.length === 0) {
+    feed.innerHTML = '<div class="text-center text-slate-600 text-xs py-3">No recent activity</div>';
+    return;
+  }
+  feed.innerHTML = recent.map(t => {
+    const time = new Date(t.date || Date.now()).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    const sideCls = t.type === 'BUY' ? 'text-blue-400' : 'text-red-400';
+    const strat = t.strategy || 'unknown';
+    const src = t.source || 'unknown';
+    const srcColor = src === 'auto-trading' ? 'text-emerald-500' : src === 'manual' ? 'text-amber-500' : 'text-cyan-400';
+    return `
+      <div class="flex justify-between items-center bg-slate-900 rounded px-2 py-1.5 border-l-2 ${t.type === 'BUY' ? 'border-blue-600' : 'border-red-600'}">
+        <span class="${sideCls} font-bold text-[10px]">${t.type} ${t.token || '?'}</span>
+        <span class="text-[9px] text-slate-500">${strat}</span><span class="text-[8px] ${srcColor} ml-1">${src}</span> · ${time}</span>
+      </div>
+    `;
+  }).join('');
+}
+
+// ── Auto Status ─────────────────────────────────────────
+function updateAutoStatus(auto) {
+  if (!auto) return;
+  const badge = document.getElementById('autoBadge');
+  const autoDot = document.getElementById('autoDot');
+  if (auto.enabled) {
+    badge.textContent = 'AUTO';
+    badge.className = 'badge bg-emerald-900 text-emerald-400';
+    autoDot.className = 'auto-dot bg-emerald-500 pulse';
+  } else {
+    badge.textContent = 'MANUAL';
+    badge.className = 'badge bg-yellow-900 text-yellow-400';
+    autoDot.className = 'auto-dot bg-yellow-500';
+  }
+}
+
+// ── Config Status ────────────────────────────────────────
+function updateConfigStatus() {
+  fetch('state/config.json?' + Date.now())
+    .then(r => r.json())
+    .then(cfg => {
+      const tg = cfg.notifications?.telegram;
+      const dc = cfg.notifications?.discord;
+      document.getElementById('telegramStatus').textContent = tg?.enabled ? '✅ connected' : '❌ not set';
+      document.getElementById('telegramStatus').className = tg?.enabled ? 'text-emerald-500' : 'text-slate-500';
+      document.getElementById('discordStatus').textContent = dc?.enabled ? '✅ connected' : '❌ not set';
+      document.getElementById('discordStatus').className = dc?.enabled ? 'text-emerald-500' : 'text-slate-500';
+    }).catch(() => {});
+}
+
+// ── Manual Token Select ──────────────────────────────────
+function updateManualTokenSelect() {
+  const sel = document.getElementById('manualToken');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">Token</option>' + allTokens.map(t => `<option value="${t}">${t}</option>`).join('');
+  if (allTokens.includes(current)) sel.value = current;
+}
+
+// ── Notifications ─────────────────────────────────────────
+function addNotification(n) {
+  notifications.unshift({ ...n, id: Date.now() + Math.random() });
+  if (notifications.length > 50) notifications.pop();
+  renderNotifications();
+}
+
+function renderNotifications() {
+  const container = document.getElementById('notificationLog');
+  document.getElementById('notifCount').textContent = notifications.length;
+  if (notifications.length === 0) {
+    container.innerHTML = '<div class="text-center text-slate-600 text-xs py-4">No notifications</div>';
+    return;
+  }
+  container.innerHTML = notifications.map(n => {
+    const emoji = { critical: '🚨', high: '⚠️', medium: '📢', low: 'ℹ️' }[n.priority] || 'ℹ️';
+    const channelIcon = { telegram: '📱', discord: '💬', dashboard: '📊' }[n.channel] || '📊';
+    const time = new Date(n.timestamp || Date.now()).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    const border = { critical: 'border-red-500', high: 'border-amber-600', medium: 'border-slate-600', low: 'border-slate-800' }[n.priority] || 'border-slate-800';
+    const bg = { critical: 'bg-red-950', high: 'bg-amber-950', medium: 'bg-slate-900', low: 'bg-slate-900' }[n.priority] || 'bg-slate-900';
+    return `
+      <div class="${bg} rounded p-2 border-l-2 ${border} slide-in">
+        <div class="flex justify-between items-start">
+          <div class="flex items-center gap-1">
+            <span class="text-[10px]">${emoji}</span>
+            <span class="text-[10px] font-semibold">${n.title || n.event || ''}</span>
+          </div>
+          <div class="flex items-center gap-1">
+            <span class="text-[9px] text-slate-600">${channelIcon}</span>
+            <span class="text-[9px] text-slate-600">${time}</span>
+          </div>
+        </div>
+        ${n.message ? `<div class="text-[10px] text-slate-400 mt-0.5 leading-relaxed">${n.message}</div>` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
+// ── Controls ─────────────────────────────────────────────
+document.getElementById('btnStartAuto').addEventListener('click', async () => {
+  const btn = document.getElementById('btnStartAuto');
+  btn.disabled = true; btn.textContent = '...';
+  try {
+    await fetch(API + '/api/auto/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ strategy: document.getElementById('strategySelect').value }) });
+    addNotification({ event: 'auto-started', priority: 'low', title: 'Auto-Trading Started', message: document.getElementById('strategySelect').value, channel: 'dashboard', timestamp: new Date().toISOString() });
+    document.getElementById('tradeStatus').textContent = 'active';
+    document.getElementById('tradeStatus').className = 'text-emerald-400';
+    document.getElementById('crewDot').className = 'auto-dot bg-emerald-500 pulse';
+  } catch(e) { addNotification({ event: 'error', priority: 'high', title: 'API Error', message: 'Could not start auto-trading', channel: 'dashboard', timestamp: new Date().toISOString() }); }
+  btn.disabled = false; btn.textContent = '▶ AUTO';
+  fetchStatus();
+});
+
+document.getElementById('btnStopAuto').addEventListener('click', async () => {
+  const btn = document.getElementById('btnStopAuto');
+  btn.disabled = true; btn.textContent = '...';
+  try {
+    await fetch(API + '/api/auto/stop', { method: 'POST' });
+    addNotification({ event: 'auto-stopped', priority: 'low', title: 'Auto-Trading Stopped', message: 'Manual mode', channel: 'dashboard', timestamp: new Date().toISOString() });
+    document.getElementById('tradeStatus').textContent = 'idle';
+    document.getElementById('tradeStatus').className = 'text-slate-500';
+  } catch(e) {}
+  btn.disabled = false; btn.textContent = '⏹ STOP';
+  fetchStatus();
+});
+
+document.getElementById('btnReset').addEventListener('click', async () => {
+  if (!confirm('Reset portfolio to $500? This closes all positions.')) return;
+  const btn = document.getElementById('btnReset');
+  btn.disabled = true; btn.textContent = '...';
+  try {
+    await fetch(API + '/api/reset', { method: 'POST' });
+    notifications = [];
+    renderNotifications();
+    addNotification({ event: 'reset', priority: 'medium', title: 'Portfolio Reset', message: 'Balance: $500', channel: 'dashboard', timestamp: new Date().toISOString() });
+    fetchStatus();
+  } catch(e) {}
+  btn.disabled = false; btn.textContent = '↺ RESET';
+});
+
+document.getElementById('btnBuy').addEventListener('click', async () => {
+  const token = document.getElementById('manualToken').value;
+  const amount = parseFloat(document.getElementById('manualAmount').value);
+  if (!token || !amount) { alert('Select token and amount'); return; }
+  try {
+    await fetch(API + '/api/buy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, percent: amount }) });
+    addNotification({ event: 'manual-buy', priority: 'medium', title: `BUY ${token}`, message: `${amount}% of balance`, channel: 'dashboard', timestamp: new Date().toISOString() });
+    fetchStatus();
+  } catch(e) { alert('Trade failed: ' + e.message); }
+});
+
+document.getElementById('btnSell').addEventListener('click', async () => {
+  const token = document.getElementById('manualToken').value;
+  const amount = parseFloat(document.getElementById('manualAmount').value);
+  if (!token || !amount) { alert('Select token and amount'); return; }
+  try {
+    await fetch(API + '/api/sell', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, percent: amount }) });
+    addNotification({ event: 'manual-sell', priority: 'medium', title: `SELL ${token}`, message: `${amount}% of position`, channel: 'dashboard', timestamp: new Date().toISOString() });
+    fetchStatus();
+  } catch(e) { alert('Trade failed: ' + e.message); }
+});
+
+// ── Init ─────────────────────────────────────────────────
+async function loadNotifications() {
+  try {
+    const r = await fetch('state/notifications.json?' + Date.now());
+    if (r.ok) {
+      const data = await r.json();
+      if (data.notifications) {
+        notifications = data.notifications.slice(0, 50);
+        renderNotifications();
+      }
+    }
+  } catch {}
+}
+
+fetchStatus();
+loadNotifications();
+setInterval(fetchStatus, 10000);
+</script>
+</body>
+</html>

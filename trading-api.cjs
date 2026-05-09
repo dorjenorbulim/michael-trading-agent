@@ -13,7 +13,23 @@
 
 const http = require('http');
 const https = require('https');
+
+// HTTP helper for CoinGecko calls
+function httpGet(url) {
+  return new Promise((resolve, reject) => {
+    const urlObj = new URL(url);
+    const req = https.get(urlObj, { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' } }, res => {
+      let d = ''; res.on('data', c => d += c); res.on('end', () => {
+        try { resolve(JSON.parse(d)); } catch { resolve(null); }
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(15000, () => { req.destroy(); resolve(null); });
+  });
+}
+
 const fs = require('fs');
+const { spawn } = require('child_process');
 
 const STATE_FILE = './trading-state.json';
 const PORT = 3002;
@@ -22,6 +38,7 @@ const TRADING_FEE = 0.001;
 const AUTO_TRADE_INTERVAL = 30000;
 const STOP_LOSS_PERCENT = 0.05;
 const TAKE_PROFIT_PERCENT = 0.15;
+const MAX_TRADES_PER_DAY = 30;
 
 // ============ STATE ============
 function loadState() {
@@ -38,33 +55,305 @@ function loadState() {
 function saveState() {
   try {
     fs.writeFileSync(STATE_FILE, JSON.stringify({
-      portfolio, autoTradingEnabled, activeStrategy, tradesToday, lastTradeTime, savedAt: new Date().toISOString()
+      portfolio, autoTradingEnabled, activeStrategy, tradesToday, lastTradeTime, lastTradeDate, savedAt: new Date().toISOString()
     }, null, 2));
   } catch (e) {}
 }
 
 const savedState = loadState();
+let lastTradeDate = savedState?.lastTradeDate || '';
 let portfolio = savedState?.portfolio || { balance: STARTING_BALANCE, positions: {}, trades: [], totalTrades: 0, winningTrades: 0 };
+let activities = savedState?.activities || [];  // all decisions incl. HOLDs
 let autoTradingEnabled = savedState?.autoTradingEnabled || false;
 let activeStrategy = savedState?.activeStrategy || 'momentum';
 let tradesToday = savedState?.tradesToday || 0;
 let lastTradeTime = savedState?.lastTradeTime || { BTC: 0, ETH: 0, SOL: 0, BNB: 0, ADA: 0, LINK: 0 };
 let autoTradeTimer = null;
+let activeSource = 'unknown'; // 'auto-trading', 'manual', or sender label
+
+// ── Strategy Auto-Switcher ──────────────────────────────────────────
+const STRATEGY_SWITCH_INTERVAL = 45; // evaluate every N cycles
+const MIN_TRADES_TO_JUDGE = 3;      // need at least this many trades before switching
+const STRATEGY_COOLDOWN = 600000;   // don't switch same strategy within 10 min
+let lastStrategySwitch = 0;
+let strategySwitchCounter = 0;
+
+let currentBestStrategy = null;
+
+function getStrategyPerformance() {
+  const sp = {};
+  Object.keys(strategies).forEach(name => {
+    if (name === 'mixed' || name === 'llm') return;
+    sp[name] = { name, trades: 0, pnl: 0, fees: 0, wins: 0, losses: 0, net: 0 };
+  });
+  portfolio.trades.forEach(t => {
+    const s = t.strategy || 'unknown';
+    if (!sp[s]) sp[s] = { name: s, trades: 0, pnl: 0, fees: 0, wins: 0, losses: 0, net: 0 };
+    sp[s].trades++;
+    sp[s].pnl += t.pnl || 0;
+    sp[s].fees += t.fee || 0;
+    if ((t.pnl || 0) > 0) sp[s].wins++;
+    else if ((t.pnl || 0) < 0) sp[s].losses++;
+  });
+  return Object.entries(sp).map(([name, d]) => ({
+    name, label: strategies[name]?.name || name,
+    trades: d.trades, pnl: d.pnl, net: d.pnl - d.fees,
+    wins: d.wins, losses: d.losses,
+    winRate: d.trades > 0 ? (d.wins / d.trades) : 0
+  })).sort((a, b) => b.net - a.net);
+}
+
+function findBestStrategy() {
+  const perf = getStrategyPerformance();
+  if (perf.length === 0) return null;
+  
+  // Filter strategies with enough trades
+  const eligible = perf.filter(s => s.trades >= MIN_TRADES_TO_JUDGE && s.net > 0);
+  if (eligible.length === 0) {
+    // No profitable strategy yet — use momentum or trend-following as default
+    return perf.find(s => s.name === 'momentum') || perf.find(s => s.name === 'trend-following') || perf[0];
+  }
+  
+  // Pick best by net P&L
+  return eligible[0];
+}
+
+function shouldAutoSwitch() {
+  const now = Date.now();
+  
+  // Don't switch too frequently
+  if (now - lastStrategySwitch < STRATEGY_COOLDOWN) return false;
+  
+  // Increment counter
+  strategySwitchCounter++;
+  if (strategySwitchCounter < STRATEGY_SWITCH_INTERVAL) return false;
+  
+  strategySwitchCounter = 0;
+  
+  const best = findBestStrategy();
+  if (!best) return false;
+  
+  // Switch if current isn't the best
+  if (activeStrategy !== best.name && best.net > 0) {
+    const perf = getStrategyPerformance();
+    const currentPerf = perf.find(s => s.name === activeStrategy);
+    const currentNet = currentPerf?.net || 0;
+    
+    // Only switch if best is meaningfully better (> 20% better)
+    if (best.net > currentNet * 1.2 || currentNet < 0) {
+      console.log(`[STRATEGY SWITCH] ${activeStrategy} (net: $${currentNet.toFixed(2)}) → ${best.name} (net: $${best.net.toFixed(2)})`);
+      activeStrategy = best.name;
+      lastStrategySwitch = now;
+      saveState();
+      return true;
+    }
+  }
+  return false;
+} // 'auto-trading', 'manual', or sender label
+
+// Dynamic token universe — starts with core 6, grows as we discover traded tokens
+const BASE_TOKENS = ['BTC', 'ETH', 'SOL', 'BNB', 'ADA', 'LINK'];
+const TRACKED_TOKENS = new Set(BASE_TOKENS); // grows dynamically
 
 let prices = { BTC: 95000, ETH: 3450, SOL: 142, BNB: 580, ADA: 0.58, LINK: 18 };
 let priceHistory = { BTC: [], ETH: [], SOL: [], BNB: [], ADA: [], LINK: [] };
 let lastPriceFetch = 0;
 let candleData = { BTC: [], ETH: [], SOL: [], BNB: [], ADA: [], LINK: [] }; // OHLCV-style data
 
+// Token safety cache — stores validation results
+// Key: token symbol, Value: { trust: bool, score: number, grade: string, cachedAt: timestamp }
+const tokenSafetyCache = new Map();
+const SAFETY_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
+// Core trusted tokens — always allow without check
+const CORE_TOKENS = ['BTC','ETH','SOL','BNB','ADA','LINK','XRP','DOT','AVAX','MATIC','UNI','LTC','ATOM','XLM','ALGO','VET','FIL','ICP','NEAR','APT','ARB','OP','SUI'];
+
+// Blocked tokens — always reject
+// ── Blocked Tokens — rug pull / pump & dump / suspicious ──────────────────────
+// Meme coins (highly volatile, no utility, first to rug)
+const BLOCKED_TOKENS = [
+  // Meme coins
+  'PEPE', 'SHIB', 'BONK', 'FLOKI', 'WIF', 'DOGE', 'ELON', 'FARTCOIN', 'TRUMP', 'BODEN',
+  'MAGA', 'RUG', 'MOG', 'BOME', 'SLERF', 'POPCAT', 'DEGEN', 'AERO', 'FWOG', 'ACT',
+  'PNUT', 'GOAT', 'AI16Z', 'FAI16Z', 'ZEREBRO', 'VADER', 'RETARD', 'SCOCK', 'CHEYENNE',
+  // Suspicious / clone tokens
+  'SAFE', 'SAFE2', 'USDT2', 'USDC2', 'USDT3', 'PAYPAL', 'SOLANA2', 'ETHEREUM2',
+  // Likely honeypots / honeypot patterns
+  'HONEYPOT', 'HPT', 'RUGPULL', 'HAMSTER', 'KOALA', 'PIG', 'CICD', 'TIGER', 'FROG',
+  // Social engineered clones
+  'TRUMP2', 'MELANIA', 'BIDEN', 'KAMALA', 'OBAMA', 'BURNS', 'MSTR', 'PLTR2',
+  // Airdrop claim scams
+  'ARB2', 'OP2', 'ZK2', 'STRK2', 'EIGEN2', 'TIA2', 'ZORA2',
+  // "AI agent" memecoins (extreme volatility, no fundamentals)
+  'AIAGENT', 'AICODER', 'VIRTUAL', 'ACT2', 'GRASS', 'ZWJ', 'VVAII',
+  // Suspicious new tokens with generic names
+  'PEPE2', 'PEPE3', 'NEWPEPE', 'NEW', 'FREE', 'GIVEAWAY', 'CLAIM', 'AIRDROP2',
+  '1000x', '1000X', 'MOON', '5000X', '10000X',
+];
+
+// Register a new token for tracking (called when trading a new token)
+function addTrackedToken(token) {
+  const t = token.toUpperCase();
+  if (TRACKED_TOKENS.has(t)) return;
+  TRACKED_TOKENS.add(t);
+  if (!prices[t]) prices[t] = 0;
+  if (!priceHistory[t]) priceHistory[t] = [];
+  if (!candleData[t]) candleData[t] = [];
+  if (!lastTradeTime[t]) lastTradeTime[t] = 0;
+  console.log(`[TOKEN] Now tracking ${t}`);
+}
+
+// ── Rising Star Scanner ──────────────────────────────────────────────
+// Scans CoinGecko for emerging tokens with momentum
+async function scanRisingStars(limit = 20) {
+  try {
+    // Get top gainers (sorted by price change 24h)
+    const data = await httpGet(
+      `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=volume_desc&per_page=100&page=1&sparkline=false&price_change_percentage=24h,7d`
+    );
+    if (!data || !Array.isArray(data)) return [];
+    
+    const candidates = [];
+    for (const coin of data) {
+      const sym = (coin.symbol || '').toUpperCase();
+      if (BLOCKED_TOKENS.includes(sym)) continue;
+      if (CORE_TOKENS.includes(sym)) continue;
+      if (TRACKED_TOKENS.has(sym)) continue;
+      
+      const mc = coin.market_cap || 0;
+      const vol = coin.total_volume || 0;
+      const change24h = coin.price_change_percentage_24h || 0;
+      const age = coin.price_change_percentage_7d !== null ? 7 : 0; // if has 7d data, at least 7 days old
+      
+      // Rising star criteria: 24h volume > $5M, 24h price change > 5%, market cap > $1M
+      if (vol > 5_000_000 && change24h > 5 && mc > 1_000_000) {
+        candidates.push({
+          symbol: sym,
+          name: coin.name,
+          price: coin.current_price,
+          change24h,
+          marketCap: mc,
+          volume24h: vol,
+          rank: coin.market_cap_rank,
+          coinId: coin.id
+        });
+      }
+    }
+    
+    // Sort by change24h descending, take top candidates
+    candidates.sort((a, b) => b.change24h - a.change24h);
+    return candidates.slice(0, limit);
+  } catch (e) {
+    console.log('[RISING STAR] Scan failed:', e.message);
+    return [];
+  }
+}
+
+// Add to tracked universe if safe
+async function addRisingStarCandidate(coinId, symbol) {
+  const sym = symbol.toUpperCase();
+  if (TRACKED_TOKENS.has(sym)) return { added: false, reason: 'already tracked' };
+  if (BLOCKED_TOKENS.includes(sym)) return { added: false, reason: 'blocked' };
+  if (CORE_TOKENS.includes(sym)) return { added: false, reason: 'core token' };
+  
+  // Quick safety check via CoinGecko data
+  try {
+    const data = await httpGet(`https://api.coingecko.com/api/v3/coins/${coinId}?localization=false&tickers=false&community_data=false&developer_data=false`);
+    if (!data) return { added: false, reason: 'api failed' };
+    
+    const md = data.market_data || {};
+    const mc = md.market_cap?.usd || 0;
+    const vol = md.total_volume?.usd || 0;
+    
+    // Minimum bar: $500K market cap, $50K 24h volume
+    if (mc < 500_000 || vol < 50_000) {
+      return { added: false, reason: `below minimums (MC:$${(mc/1e6).toFixed(1)}M, Vol:$${(vol/1e3).toFixed(0)}K)` };
+    }
+    
+    addTrackedToken(sym);
+    console.log(`[RISING STAR] Added ${sym} (${data.name}) | MC: $${(mc/1e6).toFixed(1)}M | Vol: $${(vol/1e6).toFixed(1)}M | 24h: ${md.price_change_percentage_24h?.toFixed(1)}%`);
+    
+    // Fetch price immediately
+    const priceData = await httpGet(`https://api.coingecko.com/api/v3/simple/price?ids=${coinId}&vs_currencies=usd`);
+    if (priceData && priceData[coinId]?.usd) {
+      prices[sym] = priceData[coinId].usd;
+    }
+    
+    return { added: true, symbol: sym, name: data.name, marketCap: mc, volume: vol };
+  } catch (e) {
+    return { added: false, reason: e.message };
+  }
+}
+
+function isTokenSafe(token) {
+  const t = token.toUpperCase();
+  const now = Date.now();
+  
+  // Core tokens — always safe
+  if (CORE_TOKENS.includes(t)) return { trust: true, score: 100, grade: 'A+', reason: 'core-token' };
+  
+  // Blocked tokens — always reject
+  if (BLOCKED_TOKENS.includes(t)) return { trust: false, score: 0, grade: 'F', reason: 'blocked-token' };
+  
+  // Check cache
+  const cached = tokenSafetyCache.get(t);
+  if (cached && (now - cached.cachedAt) < SAFETY_CACHE_TTL) {
+    return cached;
+  }
+  
+  // Run token-safety.cjs to check
+  try {
+    const { execSync } = require('child_process');
+    const result = execSync(`node ${__dirname}/token-safety.cjs can-trade ${t}`, { timeout: 5000 });
+    const isAllowed = result.toString().trim() === 'ALLOW';
+    const cacheEntry = { trust: isAllowed, score: isAllowed ? 50 : 0, grade: isAllowed ? 'B' : 'F', reason: 'coin-gecko-check', cachedAt: now };
+    tokenSafetyCache.set(t, cacheEntry);
+    return cacheEntry;
+  } catch (e) {
+    // If check fails, default to blocked for safety
+    return { trust: false, score: 0, grade: 'F', reason: 'check-failed-default-block' };
+  }
+}
+
 // ============ PRICE FETCHING ============
+// CoinGecko coin list for ID→Symbol mapping
+let coinListCache = null;
+async function getCoinList() {
+  if (coinListCache) return coinListCache;
+  try {
+    const data = await httpGet('https://api.coingecko.com/api/v3/coins/list');
+    if (Array.isArray(data)) { coinListCache = data; return data; }
+  } catch {}
+  return [];
+}
+
+// Map symbol → CoinGecko ID
+const SYMBOL_TO_ID = {
+  'BTC': 'bitcoin', 'ETH': 'ethereum', 'SOL': 'solana', 'BNB': 'binancecoin',
+  'ADA': 'cardano', 'LINK': 'chainlink', 'XRP': 'ripple', 'DOT': 'polkadot',
+  'AVAX': 'avalanche-2', 'MATIC': 'matic-network', 'UNI': 'uniswap', 'LTC': 'litecoin',
+  'ATOM': 'cosmos', 'XLM': 'stellar', 'ALGO': 'algorand', 'VET': 'vechain',
+  'FIL': 'filecoin', 'ICP': 'internet-computer', 'NEAR': 'near', 'APT': 'aptos',
+  'ARB': 'arbitrum', 'OP': 'optimism', 'SUI': 'sui', 'DOGE': 'dogecoin',
+  'TRX': 'tron', 'TON': 'the-open-network', 'CRO': 'cronos', 'VIRTUAL': 'virtual-protocol',
+};
+
+function symbolToId(sym) {
+  return SYMBOL_TO_ID[sym.toUpperCase()] || sym.toLowerCase();
+}
+
 async function fetchPrices() {
   const now = Date.now();
-  if (now - lastPriceFetch < 120000) return;
+  if (now - lastPriceFetch < 60000) return;
+  
+  // Always include base tokens + any that have been traded
+  const allTokens = [...TRACKED_TOKENS];
+  const ids = [...new Set(allTokens.map(symbolToId))].join(',');
   
   return new Promise((resolve) => {
     const options = {
       hostname: 'api.coingecko.com',
-      path: '/api/v3/simple/price?ids=bitcoin,ethereum,solana,binancecoin,cardano,chainlink&vs_currencies=usd&include_24h_change=true',
+      path: `/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24h_change=true&include_sparkline=true`,
       headers: { 'User-Agent': 'Mozilla/5.0 TradingBot/1.0', 'Accept': 'application/json' }
     };
     
@@ -74,17 +363,28 @@ async function fetchPrices() {
       res.on('end', () => {
         try {
           const parsed = JSON.parse(data);
-          if (parsed.status?.error_code === 429 || res.statusCode === 403) {
+          if (parsed.status?.error_code === 429 || res.statusCode === 403 || parsed.error) {
+            console.log('[PRICE] CoinGecko rate limited or error');
             resolve(false); return;
           }
-          if (parsed.bitcoin) {
-            prices.BTC = parsed.bitcoin.usd;
-            prices.ETH = parsed.ethereum.usd;
-            prices.SOL = parsed.solana.usd;
-            lastPriceFetch = now;
+          let updated = 0;
+          for (const [id, priceData] of Object.entries(parsed)) {
+            if (priceData?.usd) {
+              // Find symbol from our ID map (reverse lookup)
+              const entry = Object.entries(SYMBOL_TO_ID).find(([sym, i]) => i === id);
+              const sym = entry ? entry[0] : id.toUpperCase();
+              prices[sym] = priceData.usd;
+              if (!priceHistory[sym]) priceHistory[sym] = [];
+              if (!candleData[sym]) candleData[sym] = [];
+              priceHistory[sym].push({ price: priceData.usd, change24h: priceData.usd_24h_change || 0, time: now });
+              if (priceHistory[sym].length > 288) priceHistory[sym].shift(); // keep ~24h of minutely data
+              updated++;
+            }
           }
+          lastPriceFetch = now;
+          if (updated > 0) console.log(`[PRICE] Updated ${updated} tokens`);
           resolve(true);
-        } catch (e) { resolve(false); }
+        } catch (e) { console.log('[PRICE] Fetch failed:', e.message); resolve(false); }
       });
     }).on('error', () => resolve(false));
   });
@@ -461,18 +761,39 @@ function generateSignal(token) {
 // ============ TRADING LOGIC ============
 function shouldTrade(token) {
   const now = Date.now();
+  
+  // Reset tradesToday if it's a new day (SG timezone)
+  const sgDate = new Date(now + 8 * 60 * 60 * 1000).toISOString().split('T')[0];
+  if (sgDate !== lastTradeDate) {
+    tradesToday = 0;
+    lastTradeDate = sgDate;
+    console.log('[TRADE CAP] New day reset — trades cleared');
+  }
+  
+  // Check daily trade cap
+  if (tradesToday >= MAX_TRADES_PER_DAY) {
+    console.log(`[TRADE CAP] Daily limit reached (${MAX_TRADES_PER_DAY}) — skipping`);
+    return false;
+  }
+  
+  // 60-second cooldown per token
   if (now - lastTradeTime[token] < 60000) return false;
-  // No trade cap - unlimited trading
   return true;
 }
 
 async function runAutoTrade() {
   if (!autoTradingEnabled) return;
+  activeSource = 'auto-trading';
   
   await fetchPrices();
   simulatePriceMovement();
   
-  const tokens = ['BTC', 'ETH', 'SOL', 'BNB', 'ADA', 'LINK'];
+  // ── Strategy Auto-Switch ──────────────────────────
+  const switched = shouldAutoSwitch();
+  if (switched) console.log(`[AUTO] Now using strategy: ${activeStrategy}`);
+  
+  // Scan ALL tracked tokens — not just the base 6
+  const tokens = [...TRACKED_TOKENS];
   
   for (const token of tokens) {
     if (!shouldTrade(token)) continue;
@@ -500,18 +821,31 @@ async function runAutoTrade() {
       if (size > 10) {
         console.log(`[${activeStrategy}] BUY ${token} @ $${currentPrice.toFixed(2)}`);
         executeBuy(token, size / portfolio.balance * 100);
+        logActivity('BUY', token, currentPrice, signal, 'buy-signal', activeSource);
       }
     }
     else if (signal === 'SELL' && position) {
       console.log(`[${activeStrategy}] SELL ${token} @ $${currentPrice.toFixed(2)}`);
       executeSell(token, 100);
+      logActivity('SELL', token, currentPrice, signal, 'sell-signal', activeSource);
+    }
+    else {
+      logActivity('HOLD', token, currentPrice, signal, 'no-signal', activeSource);
     }
   }
 }
 
 // ============ PORTFOLIO ============
-function executeBuy(token, percent) {
+function executeBuy(token, percent, source) {
+  // ── Token Safety Check ──────────────────────────────
+  const safety = isTokenSafe(token);
+  if (!safety.trust) {
+    console.log(`[SAFETY] Blocked BUY ${token} — ${safety.reason} (grade: ${safety.grade})`);
+    return { success: false, error: `Token ${token} failed safety check (${safety.grade})` };
+  }
+  
   const currentPrice = prices[token];
+  if (!currentPrice) return { success: false, error: 'No price data' };
   const spendAmount = portfolio.balance * (percent / 100);
   const fee = spendAmount * TRADING_FEE;
   const quantity = (spendAmount - fee) / currentPrice;
@@ -529,7 +863,8 @@ function executeBuy(token, percent) {
     portfolio.positions[token] = { amount: quantity, entryPrice: currentPrice, date: new Date().toISOString() };
   }
   
-  portfolio.trades.push({ type: 'BUY', token, quantity, price: currentPrice, value: spendAmount, fee, strategy: activeStrategy, date: new Date().toISOString() });
+  portfolio.trades.push({ type: 'BUY', token, quantity, price: currentPrice, value: spendAmount, fee, strategy: activeStrategy, date: new Date().toISOString(), source: activeSource || 'manual' });
+  logActivity('BUY', token, currentPrice, activeStrategy, 'buy-executed', activeSource || 'manual');
   portfolio.totalTrades++;
   tradesToday++;
   lastTradeTime[token] = Date.now();
@@ -538,7 +873,24 @@ function executeBuy(token, percent) {
   return { success: true };
 }
 
-function executeSell(token, percent = 100) {
+
+// Log any trading decision as activity (incl. HOLD)
+function logActivity(type, token, price, signal, reason, source) {
+  activities.unshift({
+    id: Date.now() + Math.random(),
+    type,       // 'BUY' | 'SELL' | 'HOLD'
+    token,
+    price,
+    signal,     // the signal that triggered this
+    reason,     // stop-loss, take-profit, bull-signal, etc.
+    source,
+    timestamp: new Date().toISOString()
+  });
+  // Keep only last 100 activities
+  if (activities.length > 100) activities = activities.slice(0, 100);
+}
+
+function executeSell(token, percent = 100, source) {
   if (!portfolio.positions[token]) return { success: false };
   
   const pos = portfolio.positions[token];
@@ -555,7 +907,8 @@ function executeSell(token, percent = 100) {
   pos.amount -= sellAmount;
   if (pos.amount < 0.000001) delete portfolio.positions[token];
   
-  portfolio.trades.push({ type: 'SELL', token, quantity: sellAmount, price: currentPrice, value: grossValue, fee, pnl, strategy: activeStrategy, date: new Date().toISOString() });
+  portfolio.trades.push({ type: 'SELL', token, quantity: sellAmount, price: currentPrice, value: grossValue, fee, pnl, strategy: activeStrategy, date: new Date().toISOString(), source: activeSource || 'manual' });
+  logActivity('SELL', token, currentPrice, activeStrategy, 'sell-executed', activeSource || 'manual');
   portfolio.totalTrades++;
   tradesToday++;
   lastTradeTime[token] = Date.now();
@@ -586,6 +939,7 @@ function getOpenPositions() {
 function resetPortfolio() {
   portfolio = { balance: STARTING_BALANCE, positions: {}, trades: [], totalTrades: 0, winningTrades: 0 };
   tradesToday = 0;
+  activities = [];
   lastTradeTime = { BTC: 0, ETH: 0, SOL: 0, BNB: 0, ADA: 0, LINK: 0 };
   saveState();
 }
@@ -624,6 +978,7 @@ const server = http.createServer(async (req, res) => {
         success: true,
         timestamp: new Date().toISOString(),
         autoTrading: { enabled: autoTradingEnabled, strategy: activeStrategy, tradesToday },
+        activities: activities,
         portfolio: {
           balance: portfolio.balance.toFixed(2),
           totalValue: value.toFixed(2),
@@ -646,9 +1001,16 @@ const server = http.createServer(async (req, res) => {
         })(),
         strategyPerformance: (() => {
           const sp = {};
+          // Initialize all strategies with 0
+          Object.keys(strategies).forEach(name => {
+            if (name !== 'mixed' && name !== 'llm') {
+              sp[name] = { name, trades: 0, pnl: 0, fees: 0, wins: 0, losses: 0 };
+            }
+          });
+          // Populate from trades
           portfolio.trades.forEach(t => {
             const s = t.strategy || 'unknown';
-            if (!sp[s]) sp[s] = { trades: 0, pnl: 0, fees: 0, wins: 0, losses: 0 };
+            if (!sp[s]) sp[s] = { name: s, trades: 0, pnl: 0, fees: 0, wins: 0, losses: 0 };
             sp[s].trades++;
             sp[s].pnl += t.pnl || 0;
             sp[s].fees += t.fee || 0;
@@ -658,6 +1020,7 @@ const server = http.createServer(async (req, res) => {
           return Object.entries(sp)
             .map(([name, d]) => ({
               name,
+              label: strategies[name]?.name || name,
               trades: d.trades,
               pnl: +d.pnl.toFixed(4),
               fees: +d.fees.toFixed(4),
@@ -686,13 +1049,14 @@ const server = http.createServer(async (req, res) => {
       let body = '';
       req.on('data', chunk => body += chunk);
       req.on('end', () => {
-        const { token, percent = 10 } = JSON.parse(body || '{}');
-        if (!['BTC', 'ETH', 'SOL', 'BNB', 'ADA', 'LINK'].includes(token)) {
+        const { token, percent = 10, source = 'unknown' } = JSON.parse(body || '{}');
+        if (!prices[token]) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ success: false, error: 'Invalid token' }));
+          res.end(JSON.stringify({ success: false, error: 'Invalid token — no price data' }));
           return;
         }
-        const result = executeBuy(token.toUpperCase(), percent);
+        activeSource = source || 'manual';
+        const result = executeBuy(token.toUpperCase(), percent, source);
         res.writeHead(result.success ? 200 : 400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(result));
       });
@@ -701,8 +1065,9 @@ const server = http.createServer(async (req, res) => {
       let body = '';
       req.on('data', chunk => body += chunk);
       req.on('end', () => {
-        const { token, percent = 100 } = JSON.parse(body || '{}');
-        const result = executeSell(token.toUpperCase(), percent);
+        const { token, percent = 100, source = 'unknown' } = JSON.parse(body || '{}');
+        activeSource = source || 'manual';
+        const result = executeSell(token.toUpperCase(), percent, source);
         res.writeHead(result.success ? 200 : 400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(result));
       });
@@ -738,6 +1103,27 @@ const server = http.createServer(async (req, res) => {
       saveState();
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: true }));
+    }
+    else if (url === '/api/rising-stars' && req.method === 'GET') {
+      const candidates = await scanRisingStars(20);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, candidates }));
+    }
+    else if (url === '/api/rising-stars/add' && req.method === 'POST') {
+      let body = '';
+      req.on('data', chunk => body += chunk);
+      req.on('end', async () => {
+        try {
+          const { coinId, symbol } = JSON.parse(body || '{}');
+          if (!coinId || !symbol) throw new Error('coinId and symbol required');
+          const result = await addRisingStarCandidate(coinId, symbol);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(result));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: e.message }));
+        }
+      });
     }
     else if (url === '/api/strategies' && req.method === 'GET') {
       const stratInfo = {
