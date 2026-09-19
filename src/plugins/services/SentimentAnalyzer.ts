@@ -5,7 +5,12 @@
  * to augment trading decisions with crowd psychology insights.
  */
 
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
 import { logger, type IAgentRuntime, Service } from "@elizaos/core";
+
+const execFileAsync = promisify(execFile);
 
 export interface SentimentData {
 	symbol: string;
@@ -16,6 +21,8 @@ export interface SentimentData {
 	keywords: string[];
 	influencerMentions: number;
 	fearGreedIndex: number; // 0-100
+	/** Where the data came from: "real" = Agent-Reach/Scrapling, "simulated" = built-in simulator */
+	dataQuality?: "real" | "simulated";
 }
 
 export interface SentimentAlert {
@@ -60,19 +67,70 @@ const SOCIAL_DATA: Record<string, {
 	},
 };
 
+// Generic crypto sentiment lexicon (applies to every symbol, in addition
+// to the per-symbol keywords above)
+const GENERIC_POSITIVE = [
+	"bullish", "moon", "pump", "ath", "surge", "rally", "breakout",
+	"accumulate", "accumulating", "buy", "buying", "gains", "green",
+	"adoption", "partnership", "upgrade", "etf", "holding", "hodl",
+];
+const GENERIC_NEGATIVE = [
+	"bearish", "dump", "dumping", "crash", "rug", "rugpull", "scam",
+	"honeypot", "hack", "exploit", "liquidation", "fud", "selling",
+	"ban", "lawsuit", "delist", "losses", "plunge", "capitulation",
+];
+
 export class SentimentAnalyzer extends Service {
 	static serviceType = "sentiment-analyzer";
 	capabilityDescription = "Analyzes social sentiment for BTC, ETH, SOL trading signals";
 
 	private runtime: IAgentRuntime;
 	private sentimentCache: Map<string, SentimentData> = new Map();
+	private cacheTimestamps: Map<string, number> = new Map();
 	private alerts: SentimentAlert[] = [];
-	private lastAnalysis: number = 0;
 	private readonly CACHE_TTL = 120000; // 2 minutes for crypto (less volatile than meme coins)
+
+	// Real-data layer (Agent-Reach upstream CLIs + Scrapling). Off by
+	// default: the built-in simulator keeps running until the operator
+	// sets SOCIAL_SENTIMENT_MODE=real and installs the tools.
+	private readonly mode: "mock" | "real";
+	private readonly searchCommand: string;
+	private readonly webSources: string[];
+	private readonly scraplingBin: string;
+	private readonly scraplingBridgePath: string;
+	private readonly execTimeoutMs: number;
+	private readonly maxSearchResults: number;
+	private bridgeUnavailableLogged = false;
 
 	constructor(runtime: IAgentRuntime) {
 		super(runtime);
 		this.runtime = runtime;
+		const mode = String(
+			runtime.getSetting("SOCIAL_SENTIMENT_MODE") || "mock",
+		).toLowerCase();
+		this.mode = mode === "real" ? "real" : "mock";
+		this.searchCommand = String(
+			runtime.getSetting("SOCIAL_SEARCH_CMD") || "twitter-cli search",
+		).trim();
+		this.webSources = String(runtime.getSetting("SOCIAL_WEB_SOURCES") || "")
+			.split(",")
+			.map((s) => s.trim())
+			.filter(Boolean);
+		this.scraplingBin = String(
+			runtime.getSetting("SCRAPLING_BIN") || "python3",
+		).trim();
+		this.scraplingBridgePath = String(
+			runtime.getSetting("SCRAPLING_BRIDGE") || "scripts/scrapling_bridge.py",
+		).trim();
+		const timeoutMs = Number(
+			runtime.getSetting("SOCIAL_EXEC_TIMEOUT_MS") || 30000,
+		);
+		this.execTimeoutMs =
+			Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 30000;
+		this.maxSearchResults = Math.max(
+			1,
+			Number(runtime.getSetting("SOCIAL_MAX_RESULTS") || 15) || 15,
+		);
 	}
 
 	static async start(runtime: IAgentRuntime): Promise<SentimentAnalyzer> {
@@ -96,16 +154,17 @@ export class SentimentAnalyzer extends Service {
 			throw new Error(`Only BTC, ETH, SOL are supported. Got: ${symbol}`);
 		}
 
-		// Check cache
+		// Check cache (per-symbol TTL)
 		const cached = this.sentimentCache.get(normalizedSymbol);
-		if (cached && Date.now() - this.lastAnalysis < this.CACHE_TTL) {
+		const cachedAt = this.cacheTimestamps.get(normalizedSymbol) ?? 0;
+		if (cached && Date.now() - cachedAt < this.CACHE_TTL) {
 			return cached;
 		}
 
 		// Fetch sentiment data
 		const sentiment = await this.fetchSocialSentiment(normalizedSymbol);
 		this.sentimentCache.set(normalizedSymbol, sentiment);
-		this.lastAnalysis = Date.now();
+		this.cacheTimestamps.set(normalizedSymbol, Date.now());
 
 		// Check for alerts
 		this.checkForAlerts(normalizedSymbol, sentiment);
@@ -114,10 +173,37 @@ export class SentimentAnalyzer extends Service {
 	}
 
 	/**
-	 * Fetch social sentiment data (mock implementation)
-	 * In production, integrate with Twitter, Reddit, Telegram APIs
+	 * Fetch social sentiment data.
+	 *
+	 * SOCIAL_SENTIMENT_MODE=real: collect real mentions through Agent-Reach's
+	 * upstream CLIs (default twitter-cli) and Scrapling for web sources, then
+	 * score them with a crypto keyword lexicon. Every failure path degrades
+	 * to the built-in simulator so the trading loop never breaks on a scraper.
 	 */
 	private async fetchSocialSentiment(symbol: string): Promise<SentimentData> {
+		if (this.mode === "real") {
+			try {
+				const real = await this.fetchRealSentiment(symbol);
+				if (real) {
+					return real;
+				}
+				logger.info(
+					`[SentimentAnalyzer] No real social data collected for ${symbol} - using simulator`,
+				);
+			} catch (err) {
+				logger.warn(
+					`[SentimentAnalyzer] Real data collection failed for ${symbol} - falling back to simulator: ${err instanceof Error ? err.message : String(err)}`,
+				);
+			}
+		}
+		return this.simulateSentiment(symbol);
+	}
+
+	/**
+	 * Simulated sentiment (original behavior) - used when the real-data
+	 * layer is off or unavailable.
+	 */
+	private async simulateSentiment(symbol: string): Promise<SentimentData> {
 		const socialConfig = SOCIAL_DATA[symbol];
 		if (!socialConfig) {
 			throw new Error(`No social data for ${symbol}`);
@@ -178,6 +264,229 @@ export class SentimentAnalyzer extends Service {
 			keywords: this.generateKeywords(symbol, overall),
 			influencerMentions: Math.floor(volume * 0.001),
 			fearGreedIndex: Math.round(50 + overall * 30), // Map sentiment to 20-80 range
+			dataQuality: "simulated",
+		};
+	}
+
+	/**
+	 * Collect real mentions through Agent-Reach's upstream CLIs and Scrapling.
+	 * Returns null when nothing could be collected - the caller falls back
+	 * to the built-in simulator.
+	 */
+	private async fetchRealSentiment(
+		symbol: string,
+	): Promise<SentimentData | null> {
+		const collected: Array<{ source: string; text: string }> = [];
+
+		// Path 1: X search via the configured upstream CLI (twitter-cli)
+		if (this.searchCommand) {
+			const parts = this.searchCommand.split(/\s+/).filter(Boolean);
+			const cmd = parts[0];
+			const args = [...parts.slice(1), `$${symbol}`];
+			try {
+				const stdout = await this.runCommand(cmd, args);
+				collected.push(...this.extractItems(stdout, "twitter"));
+			} catch (err) {
+				this.logBridgeUnavailable(
+					`${this.searchCommand} (${err instanceof Error ? err.message : String(err)})`,
+				);
+			}
+		}
+
+		// Path 2: configured web sources through the Scrapling bridge
+		for (const url of this.webSources) {
+			try {
+				const stdout = await this.runCommand(this.scraplingBin, [
+					this.scraplingBridgePath,
+					url,
+				]);
+				const parsed = JSON.parse(stdout) as {
+					ok?: boolean;
+					title?: string;
+					text?: string;
+				};
+				if (parsed.ok && typeof parsed.text === "string" && parsed.text.trim()) {
+					const text = `${parsed.title || ""}\n${parsed.text}`.trim();
+					if (this.mentionsToken(symbol, text)) {
+						collected.push({ source: "web", text });
+					}
+				}
+			} catch (err) {
+				this.logBridgeUnavailable(
+					`scrapling bridge (${err instanceof Error ? err.message : String(err)})`,
+				);
+			}
+		}
+
+		if (collected.length === 0) {
+			return null;
+		}
+
+		return this.scoreItems(symbol, collected);
+	}
+
+	private mentionsToken(symbol: string, text: string): boolean {
+		const lower = text.toLowerCase();
+		const longName =
+			symbol === "BTC"
+				? "bitcoin"
+				: symbol === "ETH"
+					? "ethereum"
+					: symbol === "SOL"
+						? "solana"
+						: symbol.toLowerCase();
+		return lower.includes(symbol.toLowerCase()) || lower.includes(longName);
+	}
+
+	/**
+	 * Run a configured command safely: arg array, no shell, hard timeout.
+	 * Mirrors the execFileSync discipline from the command-injection fix.
+	 */
+	private async runCommand(cmd: string, args: string[]): Promise<string> {
+		const { stdout } = await execFileAsync(cmd, args, {
+			timeout: this.execTimeoutMs,
+			shell: false,
+			maxBuffer: 4 * 1024 * 1024,
+		});
+		return stdout;
+	}
+
+	private logBridgeUnavailable(why: string): void {
+		if (!this.bridgeUnavailableLogged) {
+			this.bridgeUnavailableLogged = true;
+			logger.warn(
+				`[SentimentAnalyzer] Real-data bridge unavailable (${why}) - falling back to the simulator. Install Agent-Reach + Scrapling, set SOCIAL_SENTIMENT_MODE=real and configure the tool commands to get real data.`,
+			);
+		}
+	}
+
+	/**
+	 * Extract text items from tool output: JSON arrays/objects with text
+	 * fields first, plain-text lines as fallback.
+	 */
+	private extractItems(
+		stdout: string,
+		source: string,
+	): Array<{ source: string; text: string }> {
+		const items: Array<{ source: string; text: string }> = [];
+		const trimmed = stdout.trim();
+		if (!trimmed) {
+			return items;
+		}
+
+		try {
+			const parsed = JSON.parse(trimmed) as unknown;
+			const list = Array.isArray(parsed)
+				? parsed
+				: typeof parsed === "object" && parsed !== null
+					? ((parsed as { data?: unknown[] }).data ??
+						(parsed as { tweets?: unknown[] }).tweets ??
+						(parsed as { items?: unknown[] }).items ??
+						[parsed])
+					: [];
+			if (Array.isArray(list)) {
+				for (const entry of list) {
+					if (typeof entry === "string") {
+						if (entry.trim()) items.push({ source, text: entry.trim() });
+					} else if (entry && typeof entry === "object") {
+						const text = String((entry as { text?: unknown }).text ?? "");
+						if (text.trim()) items.push({ source, text: text.trim() });
+					}
+				}
+			}
+		} catch {
+			for (const line of trimmed.split(/\r?\n/)) {
+				if (line.trim()) items.push({ source, text: line.trim() });
+			}
+		}
+		return items.slice(0, this.maxSearchResults);
+	}
+
+	/** Score collected items with a crypto keyword lexicon. */
+	private scoreItems(
+		symbol: string,
+		collected: Array<{ source: string; text: string }>,
+	): SentimentData {
+		const socialConfig = SOCIAL_DATA[symbol];
+		const positive = new Set(
+			[...(socialConfig?.keywords.positive ?? []), ...GENERIC_POSITIVE].map(
+				(word) => word.toLowerCase(),
+			),
+		);
+		const negative = new Set(
+			[...(socialConfig?.keywords.negative ?? []), ...GENERIC_NEGATIVE].map(
+				(word) => word.toLowerCase(),
+			),
+		);
+
+		let net = 0;
+		const matchedKeywords = new Set<string>();
+		const perSource: Record<string, { total: number; count: number }> = {};
+
+		for (const item of collected) {
+			const lower = item.text.toLowerCase();
+			let itemScore = 0;
+			for (const word of positive) {
+				if (lower.includes(word)) {
+					net += 1;
+					itemScore += 1;
+					matchedKeywords.add(word);
+				}
+			}
+			for (const word of negative) {
+				if (lower.includes(word)) {
+					net -= 1;
+					itemScore -= 1;
+					matchedKeywords.add(word);
+				}
+			}
+			perSource[item.source] = perSource[item.source] || {
+				total: 0,
+				count: 0,
+			};
+			perSource[item.source].total += itemScore;
+			perSource[item.source].count += 1;
+		}
+
+		// Aggregate: clamp the average item score; a rough gauge, not a price signal.
+		const overall = Math.max(
+			-1,
+			Math.min(1, (net / Math.max(1, collected.length)) * 0.5),
+		);
+
+		// Momentum: compare with the previous REAL reading only (the simulator's
+		// volumes are a different scale).
+		const previous = this.sentimentCache.get(symbol);
+		const momentum =
+			previous &&
+			previous.dataQuality === "real" &&
+			collected.length !== previous.volume
+				? collected.length > previous.volume
+					? "increasing"
+					: previous.volume > 0
+						? "decreasing"
+						: "stable"
+				: "stable";
+
+		const sources: SentimentData["sources"] = {};
+		for (const [source, { total, count }] of Object.entries(perSource)) {
+			sources[source] = {
+				score: Math.max(-1, Math.min(1, (total / Math.max(1, count)) * 0.5)),
+				volume: count,
+				trend: momentum,
+			};
+		}
+
+		return {
+			symbol,
+			overall,
+			volume: collected.length,
+			momentum,
+			sources,
+			keywords: [...matchedKeywords].slice(0, 5),
+			influencerMentions: 0,
+			fearGreedIndex: Math.round(50 + overall * 30),
+			dataQuality: "real",
 		};
 	}
 
