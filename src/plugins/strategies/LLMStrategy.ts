@@ -62,6 +62,10 @@ export interface LLMStrategyConfig {
 	minLiquidity: number;
 	minVolume24h: number;
 	trendingTokensCount: number;
+	/** Max wait for an LLM decision in ms; a timeout resolves to SKIP */
+	decisionTimeoutMs: number;
+	/** Max tolerated deviation (%) between the LLM-reported price and market data */
+	maxPriceDeviationPercent: number;
 	birdeyeApiKey?: string;
 }
 
@@ -72,6 +76,8 @@ const DEFAULT_CONFIG: LLMStrategyConfig = {
 	minLiquidity: 50000,
 	minVolume24h: 100000,
 	trendingTokensCount: 25,
+	decisionTimeoutMs: 60000,
+	maxPriceDeviationPercent: 10,
 };
 
 /**
@@ -88,6 +94,7 @@ RULES:
 4. Take profit must be ABOVE current price
 5. Consider liquidity and volume - avoid illiquid tokens
 6. It's perfectly acceptable to pick nothing if no good opportunities exist
+7. If you are not confident, set "pickedNothing" to true. A missed trade costs nothing; a bad trade costs money
 
 PREVIOUS PICKS:
 {{previousPicks}}
@@ -97,7 +104,7 @@ TRENDING TOKENS (Solana):
 
 CURRENT PORTFOLIO VALUE: $PORTFOLIO_VALUE_PLACEHOLDER
 
-Respond ONLY with a JSON object in this exact format:
+Respond ONLY with a single JSON object in this exact format - no markdown fences, no prose before or after:
 {
   "marketAssessment": "Brief overall market assessment without mentioning specific tokens",
   "pickedNothing": true/false,
@@ -167,8 +174,16 @@ export class LLMStrategy implements TradingStrategy {
 				this.config.minLiquidity = Number(minLiquidity);
 			}
 
+			const timeoutSetting = runtime.getSetting("LLM_DECISION_TIMEOUT_MS");
+			if (timeoutSetting) {
+				const timeoutMs = Number(timeoutSetting);
+				if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+					this.config.decisionTimeoutMs = timeoutMs;
+				}
+			}
+
 			logger.info(
-				`[${this.name}] Initialized: maxBuy=${this.config.maxBuyAmountPercent}% minOpportunity=${this.config.minOpportunityScore} maxRisk=${this.config.maxRiskScore}`,
+				`[${this.name}] Initialized: maxBuy=${this.config.maxBuyAmountPercent}% minOpportunity=${this.config.minOpportunityScore} maxRisk=${this.config.maxRiskScore} timeout=${this.config.decisionTimeoutMs}ms maxPriceDeviation=${this.config.maxPriceDeviationPercent}%`,
 			);
 		}
 	}
@@ -196,6 +211,25 @@ export class LLMStrategy implements TradingStrategy {
 			return null;
 		}
 
+		// Brain contract: any unexpected failure resolves to SKIP, never a trade.
+		try {
+			return await this.decideInternal(params, runtime);
+		} catch (err) {
+			logger.error(
+				`[${this.name}] Decision failed - resolving to SKIP: ${err instanceof Error ? err.message : String(err)}`,
+			);
+			return null;
+		}
+	}
+
+	private async decideInternal(
+		params: {
+			marketData: StrategyContextMarketData;
+			agentState: AgentState;
+			portfolioSnapshot: PortfolioSnapshot;
+		},
+		runtime: IAgentRuntime,
+	): Promise<TradeOrder | null> {
 		// Fetch trending tokens (pre-filtered by basic criteria)
 		const trendingTokens = await this.fetchTrendingTokens(runtime);
 		if (trendingTokens.length === 0) {
@@ -262,7 +296,11 @@ export class LLMStrategy implements TradingStrategy {
 
 		// Validate the decision
 		const tokenIndex = decision.recommendBuyIndex - 1;
-		if (tokenIndex < 0 || tokenIndex >= validTokens.length) {
+		if (
+			!Number.isInteger(tokenIndex) ||
+			tokenIndex < 0 ||
+			tokenIndex >= validTokens.length
+		) {
 			logger.warn(
 				`[${this.name}] Invalid token index from LLM: ${decision.recommendBuyIndex}`,
 			);
@@ -270,6 +308,27 @@ export class LLMStrategy implements TradingStrategy {
 		}
 
 		const selectedToken = validTokens[tokenIndex];
+
+		// Guard against bad market data: a non-positive price would produce an
+		// infinite or absurd quantity below.
+		if (!Number.isFinite(selectedToken.price) || selectedToken.price <= 0) {
+			logger.warn(
+				`[${this.name}] Invalid market price for ${selectedToken.symbol}: ${selectedToken.price}`,
+			);
+			return null;
+		}
+
+		// Cross-check the LLM-reported price against market data. A large
+		// deviation means the model hallucinated or anchored on stale data.
+		const priceDeviation =
+			Math.abs(decision.currentPrice - selectedToken.price) /
+			selectedToken.price;
+		if (priceDeviation > this.config.maxPriceDeviationPercent / 100) {
+			logger.warn(
+				`[${this.name}] LLM price $${decision.currentPrice.toFixed(6)} deviates ${(priceDeviation * 100).toFixed(1)}% from market price $${selectedToken.price.toFixed(6)} for ${selectedToken.symbol} - skipping`,
+			);
+			return null;
+		}
 
 		// Validate opportunity and risk scores
 		if (decision.opportunityScore < this.config.minOpportunityScore) {
@@ -299,11 +358,16 @@ export class LLMStrategy implements TradingStrategy {
 			return null;
 		}
 
-		// Calculate trade amount
-		const buyPercent = Math.min(
-			decision.buyAmountPercent,
-			this.config.maxBuyAmountPercent,
+		// Calculate trade amount. Size cap enforced in code AFTER the model
+		// answers - the model never controls real exposure.
+		const buyPercent = Math.max(
+			0,
+			Math.min(decision.buyAmountPercent, this.config.maxBuyAmountPercent),
 		);
+		if (buyPercent <= 0) {
+			logger.info(`[${this.name}] Buy amount resolved to zero - skipping`);
+			return null;
+		}
 		const tradeValueUsd =
 			params.portfolioSnapshot.totalValue * (buyPercent / 100);
 		const tradeQuantity = tradeValueUsd / selectedToken.price;
@@ -459,13 +523,12 @@ export class LLMStrategy implements TradingStrategy {
 			.replace("{{previousPicks}}", previousPicksText)
 			.replace("PORTFOLIO_VALUE_PLACEHOLDER", portfolioValue.toFixed(2));
 
-		const response = await runtime.useModel(ModelType.TEXT_LARGE, {
-			prompt: `${systemPrompt}\n\n${userPrompt}`,
-		});
-
-		if (!response) {
-			logger.warn(`[${this.name}] No response from LLM`);
-			return null;
+		const response = await this.callLLM(
+			runtime,
+			`${systemPrompt}\n\n${userPrompt}`,
+		);
+		if (response === null) {
+			return null; // callLLM already logged the reason
 		}
 
 		const parsed = parseJSONObjectFromText(response) as Record<
@@ -473,46 +536,176 @@ export class LLMStrategy implements TradingStrategy {
 			unknown
 		> | null;
 		if (!parsed) {
-			logger.warn(`[${this.name}] Failed to parse LLM response`);
+			logger.warn(
+				`[${this.name}] Failed to parse LLM response - skipping decision`,
+			);
 			return null;
 		}
 
-		// Validate and normalize the response
-		const decision: LLMTradingDecision = {
-			marketAssessment: String(parsed.marketAssessment || ""),
-			pickedNothing: Boolean(parsed.pickedNothing),
-			recommendBuyIndex:
-				parsed.recommendBuyIndex !== null
-					? Number(parsed.recommendBuyIndex)
-					: null,
-			reason: String(parsed.reason || ""),
-			opportunityScore: Number(parsed.opportunityScore || 0),
-			riskScore: Number(parsed.riskScore || 100),
-			buyAmountPercent: Math.min(
-				Number(parsed.buyAmountPercent || 0),
-				this.config.maxBuyAmountPercent,
-			),
-			tokenStrengths: String(parsed.tokenStrengths || ""),
-			tokenWeaknesses: String(parsed.tokenWeaknesses || ""),
-			exitConditions: String(parsed.exitConditions || ""),
-			exitLiquidityThreshold: Number(
-				parsed.exitLiquidityThreshold || this.config.minLiquidity,
-			),
-			exitVolumeThreshold: Number(
-				parsed.exitVolumeThreshold || this.config.minVolume24h,
-			),
-			currentPrice: Number(parsed.currentPrice || 0),
-			stopLossPrice: Number(parsed.stopLossPrice || 0),
-			takeProfitPrice: Number(parsed.takeProfitPrice || 0),
-			stopLossReasoning: String(parsed.stopLossReasoning || ""),
-			takeProfitReasoning: String(parsed.takeProfitReasoning || ""),
-		};
+		const decision = this.validateLLMDecision(parsed);
+		if (!decision) {
+			return null; // validation failure already logged
+		}
 
 		logger.debug(
 			`[${this.name}] LLM decision: pickedNothing=${decision.pickedNothing} buyIndex=${decision.recommendBuyIndex} opportunity=${decision.opportunityScore} risk=${decision.riskScore}`,
 		);
 
 		return decision;
+	}
+
+	/**
+	 * Call the LLM with a hard timeout. Every failure path - exception,
+	 * timeout, or empty response - resolves to null (SKIP).
+	 */
+	private async callLLM(
+		runtime: IAgentRuntime,
+		prompt: string,
+	): Promise<string | null> {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			const result = await Promise.race([
+				runtime.useModel(ModelType.TEXT_LARGE, {
+					prompt,
+					temperature: 0, // replayable, auditable decisions
+				}),
+				new Promise<never>((_, reject) => {
+					timer = setTimeout(
+						() =>
+							reject(
+								new Error(
+									`LLM decision timed out after ${this.config.decisionTimeoutMs}ms`,
+								),
+							),
+						this.config.decisionTimeoutMs,
+					);
+				}),
+			]);
+			if (typeof result !== "string" || result.trim() === "") {
+				logger.warn(`[${this.name}] Empty LLM response - skipping decision`);
+				return null;
+			}
+			return result;
+		} catch (err) {
+			logger.warn(
+				`[${this.name}] LLM call failed - skipping decision: ${err instanceof Error ? err.message : String(err)}`,
+			);
+			return null;
+		} finally {
+			if (timer) {
+				clearTimeout(timer);
+			}
+		}
+	}
+
+	/**
+	 * Strict validation of the LLM decision. Any violation of a
+	 * safety-relevant field rejects the entire decision (SKIP) instead of
+	 * substituting defaults that could pass as a trade.
+	 */
+	private validateLLMDecision(
+		parsed: Record<string, unknown>,
+	): LLMTradingDecision | null {
+		const reject = (why: string): null => {
+			logger.warn(`[${this.name}] LLM decision rejected: ${why}`);
+			return null;
+		};
+
+		const num = (value: unknown): number | null => {
+			const n =
+				typeof value === "number"
+					? value
+					: typeof value === "string" && value.trim() !== ""
+						? Number(value)
+						: Number.NaN;
+			return Number.isFinite(n) ? n : null;
+		};
+		const str = (value: unknown): string =>
+			typeof value === "string" ? value : "";
+
+		const reason = str(parsed.reason).trim();
+		if (reason === "") {
+			return reject("missing reason");
+		}
+
+		const pickedNothing =
+			parsed.pickedNothing === true || parsed.pickedNothing === "true";
+		const rawIndex = num(parsed.recommendBuyIndex);
+		const recommendBuyIndex = pickedNothing ? null : rawIndex;
+		if (!pickedNothing && recommendBuyIndex === null) {
+			return reject("recommendBuyIndex missing while pickedNothing is false");
+		}
+		if (
+			recommendBuyIndex !== null &&
+			(!Number.isInteger(recommendBuyIndex) || recommendBuyIndex < 1)
+		) {
+			return reject(
+				`recommendBuyIndex must be a positive integer, got ${recommendBuyIndex}`,
+			);
+		}
+
+		const opportunityScore = num(parsed.opportunityScore);
+		if (
+			opportunityScore === null ||
+			opportunityScore < 0 ||
+			opportunityScore > 100
+		) {
+			return reject("opportunityScore must be a number between 0 and 100");
+		}
+
+		const riskScore = num(parsed.riskScore);
+		if (riskScore === null || riskScore < 0 || riskScore > 100) {
+			return reject("riskScore must be a number between 0 and 100");
+		}
+
+		const rawBuyAmountPercent = num(parsed.buyAmountPercent);
+		if (rawBuyAmountPercent === null || rawBuyAmountPercent < 0) {
+			return reject(
+				`buyAmountPercent must be a non-negative number, got ${String(parsed.buyAmountPercent)}`,
+			);
+		}
+		// Size cap enforced in code AFTER the model answers.
+		const buyAmountPercent = Math.min(
+			rawBuyAmountPercent,
+			this.config.maxBuyAmountPercent,
+		);
+
+		const currentPrice = num(parsed.currentPrice);
+		if (currentPrice === null || currentPrice <= 0) {
+			return reject("currentPrice must be a positive number");
+		}
+
+		const stopLossPrice = num(parsed.stopLossPrice);
+		if (stopLossPrice === null || stopLossPrice <= 0) {
+			return reject("stopLossPrice must be a positive number");
+		}
+
+		const takeProfitPrice = num(parsed.takeProfitPrice);
+		if (takeProfitPrice === null || takeProfitPrice <= 0) {
+			return reject("takeProfitPrice must be a positive number");
+		}
+
+		return {
+			marketAssessment: str(parsed.marketAssessment),
+			pickedNothing,
+			recommendBuyIndex,
+			reason,
+			opportunityScore,
+			riskScore,
+			buyAmountPercent,
+			tokenStrengths: str(parsed.tokenStrengths),
+			tokenWeaknesses: str(parsed.tokenWeaknesses),
+			exitConditions: str(parsed.exitConditions),
+			exitLiquidityThreshold:
+				num(parsed.exitLiquidityThreshold) ?? this.config.minLiquidity,
+			exitVolumeThreshold:
+				num(parsed.exitVolumeThreshold) ?? this.config.minVolume24h,
+			currentPrice,
+			stopLossPrice,
+			takeProfitPrice,
+			stopLossReasoning: str(parsed.stopLossReasoning),
+			takeProfitReasoning: str(parsed.takeProfitReasoning),
+		};
 	}
 
 	/**
