@@ -1,3 +1,6 @@
+import { appendFile, mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
+
 import {
 	type IAgentRuntime,
 	logger,
@@ -34,6 +37,10 @@ interface TrendingToken {
  */
 interface LLMTradingDecision {
 	marketAssessment: string;
+	/** Market regime classification from the decision battery */
+	regime: string;
+	/** Calibrated confidence in this recommendation (0-1); the policy layer gates on it */
+	confidence: number;
 	pickedNothing: boolean;
 	recommendBuyIndex: number | null;
 	reason: string;
@@ -66,6 +73,14 @@ export interface LLMStrategyConfig {
 	decisionTimeoutMs: number;
 	/** Max tolerated deviation (%) between the LLM-reported price and market data */
 	maxPriceDeviationPercent: number;
+	/** Calibrated-decision discipline: below this confidence the strategy abstains */
+	minConfidence: number;
+	/** At/above this confidence the strategy trades full size; between min and this, reduced size */
+	fullConfidence: number;
+	/** Size multiplier applied when confidence sits between min and full */
+	lowConfidenceSizeFactor: number;
+	/** JSONL decision log for calibration analysis; empty string disables */
+	calibrationLogPath: string;
 	birdeyeApiKey?: string;
 }
 
@@ -78,7 +93,14 @@ const DEFAULT_CONFIG: LLMStrategyConfig = {
 	trendingTokensCount: 25,
 	decisionTimeoutMs: 60000,
 	maxPriceDeviationPercent: 10,
+	minConfidence: 0.55,
+	fullConfidence: 0.75,
+	lowConfidenceSizeFactor: 0.5,
+	calibrationLogPath: "data/llm-calibration.jsonl",
 };
+
+const KNOWN_REGIMES = ["trending", "mean_reverting", "high_vol", "chaotic"];
+const CALIBRATION_VERSION = "battery-v1";
 
 /**
  * LLM-based trading prompt template
@@ -95,6 +117,7 @@ RULES:
 5. Consider liquidity and volume - avoid illiquid tokens
 6. It's perfectly acceptable to pick nothing if no good opportunities exist
 7. If you are not confident, set "pickedNothing" to true. A missed trade costs nothing; a bad trade costs money
+8. "confidence" must be calibrated honesty: 0.9+ only for textbook setups; lower it when evidence is thin - the policy layer skips low-confidence decisions and shrinks lukewarm ones
 
 PREVIOUS PICKS:
 {{previousPicks}}
@@ -107,6 +130,8 @@ CURRENT PORTFOLIO VALUE: $PORTFOLIO_VALUE_PLACEHOLDER
 Respond ONLY with a single JSON object in this exact format - no markdown fences, no prose before or after:
 {
   "marketAssessment": "Brief overall market assessment without mentioning specific tokens",
+  "regime": "trending|mean_reverting|high_vol|chaotic (classify the current market regime)",
+  "confidence": number 0-1 (your calibrated confidence in THIS recommendation),
   "pickedNothing": true/false,
   "recommendBuyIndex": number or null (1-based index from the trending list),
   "reason": "Detailed reasoning for your decision",
@@ -133,6 +158,9 @@ Respond ONLY with a single JSON object in this exact format - no markdown fences
  * 2. Uses an LLM to analyze opportunities
  * 3. Validates tokens via RugCheck
  * 4. Generates buy signals with proper exit conditions
+ * 5. Gates decisions on calibrated confidence (abstain when uncertain,
+ *    reduce size when lukewarm) and logs every decision to a JSONL
+ *    calibration file for skill-vs-noise analysis
  */
 export class LLMStrategy implements TradingStrategy {
 	public readonly id = "llm";
@@ -182,8 +210,43 @@ export class LLMStrategy implements TradingStrategy {
 				}
 			}
 
+			const minConfidenceSetting = Number(
+				runtime.getSetting("LLM_MIN_CONFIDENCE"),
+			);
+			if (
+				Number.isFinite(minConfidenceSetting) &&
+				minConfidenceSetting >= 0 &&
+				minConfidenceSetting <= 1
+			) {
+				this.config.minConfidence = minConfidenceSetting;
+			}
+			const fullConfidenceSetting = Number(
+				runtime.getSetting("LLM_FULL_CONFIDENCE"),
+			);
+			if (
+				Number.isFinite(fullConfidenceSetting) &&
+				fullConfidenceSetting > 0 &&
+				fullConfidenceSetting <= 1
+			) {
+				this.config.fullConfidence = fullConfidenceSetting;
+			}
+			const sizeFactorSetting = Number(
+				runtime.getSetting("LLM_LOW_CONFIDENCE_SIZE_FACTOR"),
+			);
+			if (
+				Number.isFinite(sizeFactorSetting) &&
+				sizeFactorSetting > 0 &&
+				sizeFactorSetting <= 1
+			) {
+				this.config.lowConfidenceSizeFactor = sizeFactorSetting;
+			}
+			const calibrationSetting = runtime.getSetting("LLM_CALIBRATION_LOG");
+			if (calibrationSetting !== undefined && calibrationSetting !== null) {
+				this.config.calibrationLogPath = String(calibrationSetting);
+			}
+
 			logger.info(
-				`[${this.name}] Initialized: maxBuy=${this.config.maxBuyAmountPercent}% minOpportunity=${this.config.minOpportunityScore} maxRisk=${this.config.maxRiskScore} timeout=${this.config.decisionTimeoutMs}ms maxPriceDeviation=${this.config.maxPriceDeviationPercent}%`,
+				`[${this.name}] Initialized: maxBuy=${this.config.maxBuyAmountPercent}% minOpportunity=${this.config.minOpportunityScore} maxRisk=${this.config.maxRiskScore} timeout=${this.config.decisionTimeoutMs}ms maxPriceDeviation=${this.config.maxPriceDeviationPercent}% minConfidence=${this.config.minConfidence} fullConfidence=${this.config.fullConfidence}`,
 			);
 		}
 	}
@@ -291,6 +354,18 @@ export class LLMStrategy implements TradingStrategy {
 				`[${this.name}] LLM decided not to trade:`,
 				decision?.marketAssessment,
 			);
+			if (decision) {
+				await this.logCalibration({
+					dataVersion: CALIBRATION_VERSION,
+					action: "skip_no_pick",
+					symbol: null,
+					regime: decision.regime,
+					confidence: decision.confidence,
+					opportunityScore: decision.opportunityScore,
+					riskScore: decision.riskScore,
+					reason: decision.reason.slice(0, 300),
+				});
+			}
 			return null;
 		}
 
@@ -335,11 +410,31 @@ export class LLMStrategy implements TradingStrategy {
 			logger.info(
 				`[${this.name}] Opportunity score too low: ${decision.opportunityScore}`,
 			);
+			await this.logCalibration({
+				dataVersion: CALIBRATION_VERSION,
+				action: "skip_thresholds",
+				symbol: selectedToken.symbol,
+				regime: decision.regime,
+				confidence: decision.confidence,
+				opportunityScore: decision.opportunityScore,
+				riskScore: decision.riskScore,
+				note: `opportunity ${decision.opportunityScore} < ${this.config.minOpportunityScore}`,
+			});
 			return null;
 		}
 
 		if (decision.riskScore > this.config.maxRiskScore) {
 			logger.info(`[${this.name}] Risk score too high: ${decision.riskScore}`);
+			await this.logCalibration({
+				dataVersion: CALIBRATION_VERSION,
+				action: "skip_thresholds",
+				symbol: selectedToken.symbol,
+				regime: decision.regime,
+				confidence: decision.confidence,
+				opportunityScore: decision.opportunityScore,
+				riskScore: decision.riskScore,
+				note: `risk ${decision.riskScore} > ${this.config.maxRiskScore}`,
+			});
 			return null;
 		}
 
@@ -358,16 +453,70 @@ export class LLMStrategy implements TradingStrategy {
 			return null;
 		}
 
+		// Confidence gating (calibrated-decision discipline): abstain when
+		// uncertain, reduce size when lukewarm. Thresholds live in code, not
+		// in the model's output.
+		if (decision.confidence < this.config.minConfidence) {
+			logger.info(
+				`[${this.name}] Confidence ${decision.confidence.toFixed(2)} below minimum ${this.config.minConfidence} - skipping`,
+			);
+			await this.logCalibration({
+				dataVersion: CALIBRATION_VERSION,
+				action: "skip_low_confidence",
+				symbol: selectedToken.symbol,
+				regime: decision.regime,
+				confidence: decision.confidence,
+				opportunityScore: decision.opportunityScore,
+				riskScore: decision.riskScore,
+				note: `confidence ${decision.confidence} < ${this.config.minConfidence}`,
+			});
+			return null;
+		}
+		const sizeFactor =
+			decision.confidence < this.config.fullConfidence
+				? this.config.lowConfidenceSizeFactor
+				: 1;
+		const calibrationAction = sizeFactor === 1 ? "buy_full" : "buy_reduced";
+
 		// Calculate trade amount. Size cap enforced in code AFTER the model
-		// answers - the model never controls real exposure.
+		// answers - the model never controls real exposure. Confidence scales
+		// the size: lukewarm decisions trade reduced size.
 		const buyPercent = Math.max(
 			0,
-			Math.min(decision.buyAmountPercent, this.config.maxBuyAmountPercent),
+			Math.min(
+				decision.buyAmountPercent * sizeFactor,
+				this.config.maxBuyAmountPercent,
+			),
 		);
 		if (buyPercent <= 0) {
 			logger.info(`[${this.name}] Buy amount resolved to zero - skipping`);
+			await this.logCalibration({
+				dataVersion: CALIBRATION_VERSION,
+				action: "skip_zero_size",
+				symbol: selectedToken.symbol,
+				regime: decision.regime,
+				confidence: decision.confidence,
+				opportunityScore: decision.opportunityScore,
+				riskScore: decision.riskScore,
+			});
 			return null;
 		}
+		await this.logCalibration({
+			dataVersion: CALIBRATION_VERSION,
+			action: calibrationAction,
+			symbol: selectedToken.symbol,
+			regime: decision.regime,
+			confidence: decision.confidence,
+			opportunityScore: decision.opportunityScore,
+			riskScore: decision.riskScore,
+			buyAmountPercentRaw: decision.buyAmountPercent,
+			buyPercentFinal: buyPercent,
+			currentPrice: decision.currentPrice,
+			stopLossPrice: decision.stopLossPrice,
+			takeProfitPrice: decision.takeProfitPrice,
+			portfolioValue: params.portfolioSnapshot.totalValue,
+			reason: decision.reason.slice(0, 300),
+		});
 		const tradeValueUsd =
 			params.portfolioSnapshot.totalValue * (buyPercent / 100);
 		const tradeQuantity = tradeValueUsd / selectedToken.price;
@@ -397,6 +546,30 @@ export class LLMStrategy implements TradingStrategy {
 			timestamp: Date.now(),
 			reason: `LLM Strategy: ${decision.reason} | Stop: $${decision.stopLossPrice.toFixed(6)} | Target: $${decision.takeProfitPrice.toFixed(6)}`,
 		};
+	}
+
+	/**
+	 * Append a decision record for calibration analysis (does "80% confident"
+	 * mean 80% right on our data?). Best-effort: a log failure must never
+	 * break trading.
+	 */
+	private async logCalibration(entry: Record<string, unknown>): Promise<void> {
+		const path = this.config.calibrationLogPath;
+		if (!path) {
+			return;
+		}
+		try {
+			await mkdir(dirname(path), { recursive: true });
+			await appendFile(
+				path,
+				`${JSON.stringify({ ts: Date.now(), ...entry })}\n`,
+				"utf8",
+			);
+		} catch (err) {
+			logger.warn(
+				`[${this.name}] Calibration log write failed: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
 	}
 
 	/**
@@ -628,6 +801,16 @@ export class LLMStrategy implements TradingStrategy {
 			return reject("missing reason");
 		}
 
+		// Calibrated confidence is required on every decision - the policy
+		// layer gates on it, so a missing value is fail-closed.
+		const confidence = num(parsed.confidence);
+		if (confidence === null || confidence < 0 || confidence > 1) {
+			return reject("confidence must be a number between 0 and 1");
+		}
+
+		const regimeRaw = str(parsed.regime).trim().toLowerCase();
+		const regime = KNOWN_REGIMES.includes(regimeRaw) ? regimeRaw : "unknown";
+
 		const pickedNothing =
 			parsed.pickedNothing === true || parsed.pickedNothing === "true";
 		const rawIndex = num(parsed.recommendBuyIndex);
@@ -687,6 +870,8 @@ export class LLMStrategy implements TradingStrategy {
 
 		return {
 			marketAssessment: str(parsed.marketAssessment),
+			regime,
+			confidence,
 			pickedNothing,
 			recommendBuyIndex,
 			reason,
