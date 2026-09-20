@@ -19,4 +19,5 @@ node_modules/
 # Local databases / personal data
 .eliza/
 *.db
+data/
 trade-history*.json

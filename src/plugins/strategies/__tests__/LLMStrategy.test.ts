@@ -68,6 +68,8 @@ const birdeyeResponse = (ok: boolean) => ({
 
 const VALID_DECISION = {
 	marketAssessment: "Mixed market with one strong candidate",
+	regime: "trending",
+	confidence: 0.9,
 	pickedNothing: false,
 	recommendBuyIndex: 1,
 	reason: "strong momentum and healthy liquidity",
@@ -105,6 +107,7 @@ describe("LLMStrategy brain contract", () => {
 		strategy = new LLMStrategy({
 			birdeyeApiKey: "test-birdeye-key",
 			decisionTimeoutMs: 200,
+			calibrationLogPath: "", // keep most tests side-effect free
 		});
 		(globalThis as unknown as { fetch: unknown }).fetch = vi
 			.fn()
@@ -205,6 +208,65 @@ describe("LLMStrategy brain contract", () => {
 
 		llmReply({ ...VALID_DECISION, recommendBuyIndex: "abc" });
 		expect(await decideOnce()).toBeNull();
+	});
+
+	it("skips when confidence is missing (fail-closed)", async () => {
+		const { confidence: _omitted, ...withoutConfidence } = VALID_DECISION;
+		llmReply(withoutConfidence);
+		expect(await decideOnce()).toBeNull();
+	});
+
+	it("skips when confidence is below the minimum", async () => {
+		llmReply({ ...VALID_DECISION, confidence: 0.3 });
+		expect(await decideOnce()).toBeNull();
+	});
+
+	it("reduces size when confidence is lukewarm", async () => {
+		llmReply({ ...VALID_DECISION, confidence: 0.6 });
+		const order = await decideOnce();
+		expect(order).not.toBeNull();
+		expect(order?.quantity).toBeCloseTo((PORTFOLIO_VALUE * 0.1 * 0.5) / 1.0, 6);
+	});
+
+	it("writes calibration entries for skips and buys", async () => {
+		const logPath = `/tmp/llm-calibration-test-${Date.now()}.jsonl`;
+		strategy = new LLMStrategy({
+			birdeyeApiKey: "test-birdeye-key",
+			calibrationLogPath: logPath,
+		});
+		llmReply({ ...VALID_DECISION, confidence: 0.3 });
+		expect(await decideOnce()).toBeNull(); // skip_low_confidence
+		llmReply(VALID_DECISION);
+		const order = await decideOnce(); // buy_full
+		expect(order).not.toBeNull();
+
+		const { readFile } = await import("node:fs/promises");
+		const lines = (await readFile(logPath, "utf8")).trim().split("\n");
+		expect(lines.length).toBe(2);
+		const skipEntry = JSON.parse(lines[0]) as {
+			action: string;
+			confidence: number;
+		};
+		const buyEntry = JSON.parse(lines[1]) as {
+			action: string;
+			confidence: number;
+			symbol: string;
+			regime: string;
+			dataVersion: string;
+		};
+		expect(skipEntry.action).toBe("skip_low_confidence");
+		expect(skipEntry.confidence).toBe(0.3);
+		expect(buyEntry.action).toBe("buy_full");
+		expect(buyEntry.confidence).toBe(0.9);
+		expect(buyEntry.symbol).toBe("TEST");
+		expect(buyEntry.regime).toBe("trending");
+		expect(buyEntry.dataVersion).toBe("battery-v1");
+	});
+
+	it("tolerates an unknown regime", async () => {
+		llmReply({ ...VALID_DECISION, regime: "weird" });
+		const order = await decideOnce();
+		expect(order).not.toBeNull();
 	});
 
 	it("skips when recommendBuyIndex is out of range", async () => {
