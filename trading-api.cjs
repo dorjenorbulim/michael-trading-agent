@@ -38,7 +38,12 @@ const TRADING_FEE = 0.001;
 const AUTO_TRADE_INTERVAL = 30000;
 const STOP_LOSS_PERCENT = 0.05;
 const TAKE_PROFIT_PERCENT = 0.15;
-const MAX_TRADES_PER_DAY = 30;
+// 8 trades/day cap: at small capital, more trades means fees eat the balance
+const MAX_TRADES_PER_DAY = 8;
+
+// Strategies the auto-switcher must never select (broken, unreliable, or
+// dependent on volume indicators that were unreliable at small capital)
+const DISABLED_STRATEGIES = new Set(['random', 'llm', 'scalp', 'breakout', 'momentum-breakout']);
 
 // ============ STATE ============
 function loadState() {
@@ -66,6 +71,7 @@ let portfolio = savedState?.portfolio || { balance: STARTING_BALANCE, positions:
 let activities = savedState?.activities || [];  // all decisions incl. HOLDs
 let autoTradingEnabled = savedState?.autoTradingEnabled || false;
 let activeStrategy = savedState?.activeStrategy || 'momentum';
+if (DISABLED_STRATEGIES.has(activeStrategy)) activeStrategy = 'momentum'; // never resume into a disabled strategy
 let tradesToday = savedState?.tradesToday || 0;
 let lastTradeTime = savedState?.lastTradeTime || { BTC: 0, ETH: 0, SOL: 0, BNB: 0, ADA: 0, LINK: 0 };
 let autoTradeTimer = null;
@@ -107,11 +113,11 @@ function findBestStrategy() {
   const perf = getStrategyPerformance();
   if (perf.length === 0) return null;
   
-  // Filter strategies with enough trades
-  const eligible = perf.filter(s => s.trades >= MIN_TRADES_TO_JUDGE && s.net > 0);
+  // Filter strategies with enough trades (never select a disabled strategy)
+  const eligible = perf.filter(s => !DISABLED_STRATEGIES.has(s.name) && s.trades >= MIN_TRADES_TO_JUDGE && s.net > 0);
   if (eligible.length === 0) {
     // No profitable strategy yet — use momentum or trend-following as default
-    return perf.find(s => s.name === 'momentum') || perf.find(s => s.name === 'trend-following') || perf[0];
+    return perf.find(s => s.name === 'momentum') || perf.find(s => s.name === 'trend-following') || perf.find(s => !DISABLED_STRATEGIES.has(s.name)) || null;
   }
   
   // Pick best by net P&L
@@ -286,8 +292,14 @@ async function addRisingStarCandidate(coinId, symbol) {
 }
 
 function isTokenSafe(token) {
-  const t = token.toUpperCase();
+  const t = String(token || '').toUpperCase().trim();
   const now = Date.now();
+  
+  // Strict symbol validation before any exec — token names come from external
+  // APIs and user input, so they must never reach a shell
+  if (!/^[A-Z0-9]{1,16}$/.test(t)) {
+    return { trust: false, score: 0, grade: 'F', reason: 'invalid-symbol-format' };
+  }
   
   // Core tokens — always safe
   if (CORE_TOKENS.includes(t)) return { trust: true, score: 100, grade: 'A+', reason: 'core-token' };
@@ -301,10 +313,10 @@ function isTokenSafe(token) {
     return cached;
   }
   
-  // Run token-safety.cjs to check
+  // Run token-safety.cjs to check (args passed without a shell — no injection)
   try {
-    const { execSync } = require('child_process');
-    const result = execSync(`node ${__dirname}/token-safety.cjs can-trade ${t}`, { timeout: 5000 });
+    const { execFileSync } = require('child_process');
+    const result = execFileSync('node', [`${__dirname}/token-safety.cjs`, 'can-trade', t], { timeout: 5000 });
     const isAllowed = result.toString().trim() === 'ALLOW';
     const cacheEntry = { trust: isAllowed, score: isAllowed ? 50 : 0, grade: isAllowed ? 'B' : 'F', reason: 'coin-gecko-check', cachedAt: now };
     tokenSafetyCache.set(t, cacheEntry);
@@ -353,7 +365,7 @@ async function fetchPrices() {
   return new Promise((resolve) => {
     const options = {
       hostname: 'api.coingecko.com',
-      path: `/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24h_change=true&include_sparkline=true`,
+      path: `/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24h_change=true&include_24h_vol=true&include_sparkline=true`,
       headers: { 'User-Agent': 'Mozilla/5.0 TradingBot/1.0', 'Accept': 'application/json' }
     };
     
@@ -376,7 +388,14 @@ async function fetchPrices() {
               prices[sym] = priceData.usd;
               if (!priceHistory[sym]) priceHistory[sym] = [];
               if (!candleData[sym]) candleData[sym] = [];
-              priceHistory[sym].push({ price: priceData.usd, change24h: priceData.usd_24h_change || 0, time: now });
+              // Always populate volume: per-minute estimate of 24h volume, carrying
+              // forward the last known value when the API omits it (prevents NaN poisoning)
+              const prev = priceHistory[sym][priceHistory[sym].length - 1];
+              const lastKnownVolume = Number.isFinite(prev?.volume) && prev.volume > 0 ? prev.volume : 10000000;
+              const volume = Number.isFinite(priceData.usd_24h_vol) && priceData.usd_24h_vol > 0
+                ? priceData.usd_24h_vol / 1440 // 24h volume → per-minute estimate
+                : lastKnownVolume;
+              priceHistory[sym].push({ price: priceData.usd, change24h: priceData.usd_24h_change || 0, time: now, volume });
               if (priceHistory[sym].length > 288) priceHistory[sym].shift(); // keep ~24h of minutely data
               updated++;
             }
@@ -399,7 +418,9 @@ function simulatePriceMovement() {
     const volatility = token === 'BTC' ? 0.003 : token === 'ETH' ? 0.004 : 0.005;
     const change = (Math.random() - 0.5) * 2 * volatility;
     const newPrice = last.price * (1 + change);
-    const volume = last.volume * (0.8 + Math.random() * 0.4);
+    // Carry forward the last known volume instead of propagating NaN into candles
+    const lastVolume = Number.isFinite(last.volume) && last.volume > 0 ? last.volume : 10000000;
+    const volume = lastVolume * (0.8 + Math.random() * 0.4);
     
     history.push({ time: Date.now(), price: newPrice, change: change * 100, volume });
     
@@ -437,22 +458,41 @@ function getSMA(candles, period) {
   return candles.slice(-period).reduce((a, b) => a + b.close, 0) / period;
 }
 
-function getEMA(candles, period) {
-  if (candles.length < period) return candles[candles.length - 1]?.close || 0;
+// EMA over a plain numeric series, seeded with an SMA (same convention as getEMA)
+function emaOfSeries(values, period) {
+  if (values.length < period) return values.length > 0 ? values[values.length - 1] : 0;
   const multiplier = 2 / (period + 1);
-  let ema = candles.slice(0, period).reduce((a, b) => a + b.close, 0) / period;
-  for (let i = period; i < candles.length; i++) {
-    ema = (candles[i].close - ema) * multiplier + ema;
+  let ema = values.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < values.length; i++) {
+    ema = (values[i] - ema) * multiplier + ema;
   }
   return ema;
 }
 
+function getEMA(candles, period) {
+  return emaOfSeries(candles.map(c => c.close), period);
+}
+
 function getMACD(candles) {
-  const ema12 = getEMA(candles, 12);
-  const ema26 = getEMA(candles, 26);
-  const macdLine = ema12 - ema26;
-  const signalLine = getEMA(candles.map((c, i) => ({ close: macdLine })).slice(-9), 9);
-  return { macd: macdLine, signal: signalLine, histogram: macdLine - signalLine };
+  const closes = candles.map(c => c.close);
+  if (closes.length < 26) return { macd: 0, signal: 0, histogram: 0 };
+
+  // MACD line series: EMA(12) - EMA(26), tracked per candle
+  const mult12 = 2 / 13;
+  const mult26 = 2 / 27;
+  let ema12 = closes.slice(0, 12).reduce((a, b) => a + b, 0) / 12;
+  let ema26 = closes.slice(0, 26).reduce((a, b) => a + b, 0) / 26;
+  const macdSeries = [];
+  for (let i = 0; i < closes.length; i++) {
+    if (i >= 12) ema12 = (closes[i] - ema12) * mult12 + ema12;
+    if (i >= 26) ema26 = (closes[i] - ema26) * mult26 + ema26;
+    if (i >= 25) macdSeries.push(ema12 - ema26);
+  }
+
+  // Signal line: EMA(9) of the MACD line series (not of a constant)
+  const macd = macdSeries[macdSeries.length - 1];
+  const signal = emaOfSeries(macdSeries, 9);
+  return { macd, signal, histogram: macd - signal };
 }
 
 function getBollingerBands(candles, period = 20, stdDev = 2) {
@@ -493,8 +533,10 @@ function getHighLow(candles, period = 20) {
 
 function getMomentum(candles, period = 10) {
   if (candles.length < period) return 0;
+  if (period <= 3) return 0; // need at least one candle outside the recent 3-candle window
   const recent = candles.slice(-3).reduce((a, b) => a + b.close, 0) / 3;
   const earlier = candles.slice(-period, -3).reduce((a, b) => a + b.close, 0) / (period - 3);
+  if (!earlier) return 0; // guard against divide-by-zero
   return (recent - earlier) / earlier;
 }
 
@@ -676,7 +718,7 @@ const strategies = {
     if (candles.length < 5) return 'HOLD';
     
     const rsi = getRSI(candles, 5);
-    const momentum = getMomentum(candles, 3);
+    const momentum = getMomentum(candles, 5); // period 3 was degenerate: empty lookback → 0/0
     const macd = getMACD(candles);
     
     if (rsi < 35 && momentum > 0 && macd.histogram > 0) return 'BUY';
@@ -1085,6 +1127,11 @@ const server = http.createServer(async (req, res) => {
         if (!Object.keys(strategies).includes(strategy)) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ success: false, error: 'Unknown strategy. Use: ' + Object.keys(strategies).join(', ') }));
+          return;
+        }
+        if (DISABLED_STRATEGIES.has(strategy)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: `Strategy '${strategy}' is disabled (broken, unreliable, or volume-dependent). Available: ` + Object.keys(strategies).filter(s => !DISABLED_STRATEGIES.has(s)).join(', ') }));
           return;
         }
         activeStrategy = strategy;

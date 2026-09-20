@@ -12,3 +12,11 @@ dist/
 # State files (personal)
 trading-state.json
 .env
+
+# Dependencies
+node_modules/
+
+# Local databases / personal data
+.eliza/
+*.db
+trade-history*.json
