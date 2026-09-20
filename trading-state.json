@@ -1,16 +1,26 @@
 {
   "portfolio": {
-    "balance": 375.79917230550376,
+    "balance": 236.40682305186237,
     "positions": {
+      "SOL": {
+        "amount": 0.529700365037793,
+        "entryPrice": 111.39,
+        "date": "2026-09-19T19:36:17.680Z"
+      },
       "ADA": {
-        "amount": 78.66054962428232,
-        "entryPrice": 0.58,
-        "date": "2026-05-05T15:47:07.282Z"
+        "amount": 217.39412705819598,
+        "entryPrice": 0.2307,
+        "date": "2026-09-19T19:37:17.447Z"
+      },
+      "LINK": {
+        "amount": 3.399513663913632,
+        "entryPrice": 12.54,
+        "date": "2026-09-19T19:37:46.806Z"
       },
       "ETH": {
-        "amount": 0.013816958472905096,
-        "entryPrice": 2385.67,
-        "date": "2026-05-05T15:50:37.287Z"
+        "amount": 0.015807569902740508,
+        "entryPrice": 2636.53,
+        "date": "2026-09-19T19:44:46.838Z"
       }
     },
     "trades": [
@@ -10134,21 +10144,113 @@
         "pnl": 0.10328551270208633,
         "strategy": "mixed",
         "date": "2026-05-06T14:37:13.406Z"
+      },
+      {
+        "type": "SELL",
+        "token": "ADA",
+        "quantity": 78.66054962428232,
+        "price": 0.228425,
+        "value": 17.968036047926688,
+        "fee": 0.01796803604792669,
+        "pnl": -27.655082734157055,
+        "strategy": "mixed",
+        "date": "2026-09-19T18:33:18.152Z",
+        "source": "auto-trading"
+      },
+      {
+        "type": "BUY",
+        "token": "SOL",
+        "quantity": 0.529700365037793,
+        "price": 111.39,
+        "value": 59.062386047607376,
+        "fee": 0.05906238604760738,
+        "strategy": "mixed",
+        "date": "2026-09-19T19:36:17.680Z",
+        "source": "auto-trading"
+      },
+      {
+        "type": "BUY",
+        "token": "ADA",
+        "quantity": 217.39412705819598,
+        "price": 0.2307,
+        "value": 50.20302814046627,
+        "fee": 0.050203028140466274,
+        "strategy": "mixed",
+        "date": "2026-09-19T19:37:17.447Z",
+        "source": "auto-trading"
+      },
+      {
+        "type": "BUY",
+        "token": "LINK",
+        "quantity": 3.399513663913632,
+        "price": 12.54,
+        "value": 42.672573919396335,
+        "fee": 0.042672573919396335,
+        "strategy": "mixed",
+        "date": "2026-09-19T19:37:46.806Z",
+        "source": "auto-trading"
+      },
+      {
+        "type": "BUY",
+        "token": "BNB",
+        "quantity": 0.04746458848819182,
+        "price": 763.42,
+        "value": 36.27168783148689,
+        "fee": 0.03627168783148689,
+        "strategy": "mixed",
+        "date": "2026-09-19T19:39:17.421Z",
+        "source": "auto-trading"
+      },
+      {
+        "type": "SELL",
+        "token": "BNB",
+        "quantity": 0.04746458848819182,
+        "price": 763.36,
+        "value": 36.23256826834611,
+        "fee": 0.03623256826834611,
+        "pnl": -0.0028478753092889193,
+        "strategy": "mixed",
+        "date": "2026-09-19T19:42:46.829Z",
+        "source": "auto-trading"
+      },
+      {
+        "type": "SELL",
+        "token": "ETH",
+        "quantity": 0.013816958472905096,
+        "price": 2636.34,
+        "value": 36.426200300458625,
+        "fee": 0.03642620030045862,
+        "pnl": 3.4634969804031215,
+        "strategy": "mixed",
+        "date": "2026-09-19T19:43:46.832Z",
+        "source": "auto-trading"
+      },
+      {
+        "type": "BUY",
+        "token": "ETH",
+        "quantity": 0.015807569902740508,
+        "price": 2636.53,
+        "value": 41.71885112679924,
+        "fee": 0.04171885112679924,
+        "strategy": "mixed",
+        "date": "2026-09-19T19:44:46.838Z",
+        "source": "auto-trading"
       }
     ],
-    "totalTrades": 964,
-    "winningTrades": 105
+    "totalTrades": 972,
+    "winningTrades": 106
   },
   "autoTradingEnabled": true,
   "activeStrategy": "mixed",
-  "tradesToday": 964,
+  "tradesToday": 8,
   "lastTradeTime": {
     "BTC": 1778078233406,
-    "ETH": 1777996237287,
-    "SOL": 1778078113400,
-    "ADA": 1777996027282,
-    "LINK": 1778078053398,
-    "BNB": 1778077843390
+    "ETH": 1789847086838,
+    "SOL": 1789846577680,
+    "ADA": 1789846637447,
+    "LINK": 1789846666806,
+    "BNB": 1789846966829
   },
-  "savedAt": "2026-05-06T14:37:13.406Z"
+  "lastTradeDate": "2026-09-20",
+  "savedAt": "2026-09-19T19:44:46.838Z"
 }
