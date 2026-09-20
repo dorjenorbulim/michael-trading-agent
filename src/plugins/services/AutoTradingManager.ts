@@ -1,6 +1,10 @@
 import { type IAgentRuntime, logger, Service } from "@elizaos/core";
 import { v4 as uuidv4 } from "uuid";
 import { LLMStrategy } from "../strategies/LLMStrategy.ts";
+import { DISABLED_STRATEGIES, DCA_CONFIG, REBALANCE_CONFIG, STOP_LOSS_CONFIG } from "../config/trading.ts";
+import { StopLossManager } from "./StopLossManager.ts";
+import { DCAScheduler } from "./DCAScheduler.ts";
+import { PortfolioRebalancer } from "./PortfolioRebalancer.ts";
 import type {
 	AgentState,
 	OHLCV,
@@ -149,6 +153,13 @@ export class AutoTradingManager extends Service {
 	private validationService: TokenValidationService | null = null;
 	private trajectoryService: TradingTrajectoryService | null = null;
 
+	// New risk management modules
+	private stopLossManager = new StopLossManager(STOP_LOSS_CONFIG);
+	private dcaScheduler = new DCAScheduler(DCA_CONFIG);
+	private rebalancer = new PortfolioRebalancer(REBALANCE_CONFIG);
+	private _dcaInterval?: NodeJS.Timeout;
+	private _rebalanceInterval?: NodeJS.Timeout;
+
 	public static async start(
 		runtime: IAgentRuntime,
 	): Promise<AutoTradingManager> {
@@ -190,20 +201,41 @@ export class AutoTradingManager extends Service {
 			{ MeanReversionStrategy },
 			{ RuleBasedStrategy },
 			{ RandomStrategy },
+			{ TrendFollowingStrategy },
+			{ MeanReversionSimpleStrategy },
 		] = await Promise.all([
 			import("../strategies/MomentumBreakoutStrategy.ts"),
 			import("../strategies/MeanReversionStrategy.ts"),
 			import("../strategies/RuleBasedStrategy.ts"),
 			import("../strategies/RandomStrategy.ts"),
+			import("../strategies/TrendFollowingStrategy.ts"),
+			import("../strategies/MeanReversionSimpleStrategy.ts"),
 		]);
 
 		const llm = new LLMStrategy();
 		await llm.initialize(this.runtime);
-		this.registerStrategy(llm);
-		this.registerStrategy(new MomentumBreakoutStrategy());
-		this.registerStrategy(new MeanReversionStrategy());
-		this.registerStrategy(new RuleBasedStrategy());
-		this.registerStrategy(new RandomStrategy());
+
+		// Register in a stable order, skipping anything in DISABLED_STRATEGIES
+		// (new strategies are enabled by default unless listed there).
+		const candidates: TradingStrategy[] = [
+			llm,
+			new MomentumBreakoutStrategy(),
+			new MeanReversionStrategy(),
+			new RuleBasedStrategy(),
+			new RandomStrategy(),
+			new TrendFollowingStrategy(),
+			new MeanReversionSimpleStrategy(),
+		];
+
+		for (const strategy of candidates) {
+			if (DISABLED_STRATEGIES.has(strategy.id)) {
+				logger.info(
+					`[AutoTradingManager] Skipping disabled strategy: ${strategy.id}`,
+				);
+				continue;
+			}
+			this.registerStrategy(strategy);
+		}
 	}
 
 	public registerStrategy(strategy: TradingStrategy): void {
@@ -249,6 +281,10 @@ export class AutoTradingManager extends Service {
 		this.tradingLoop().catch((e) =>
 			logger.error("[AutoTradingManager] Initial loop error:", e),
 		);
+
+		// Start DCA and rebalance check timers (1 hour interval)
+		this._dcaInterval = setInterval(() => this.checkDCA().catch(e => logger.error("[AutoTradingManager] DCA error:", e)), 3600000);
+		this._rebalanceInterval = setInterval(() => this.checkRebalance().catch(e => logger.error("[AutoTradingManager] Rebalance error:", e)), 3600000);
 	}
 
 	public async stopTrading(): Promise<void> {
@@ -264,11 +300,22 @@ export class AutoTradingManager extends Service {
 			clearInterval(this.tradingInterval);
 			this.tradingInterval = undefined;
 		}
+		if (this._dcaInterval) { clearInterval(this._dcaInterval); this._dcaInterval = undefined; }
+		if (this._rebalanceInterval) { clearInterval(this._rebalanceInterval); this._rebalanceInterval = undefined; }
+
+		// Clear stop-loss positions on stop
+		for (const symbol of this.stopLossManager.getAllStops().keys()) {
+			this.stopLossManager.closePosition(symbol);
+		}
+
 		logger.info("[AutoTradingManager] Stopped");
 	}
 
 	private async tradingLoop(): Promise<void> {
 		if (!this.isTrading || !this.activeStrategy || !this.currentConfig) return;
+
+		// Check stop-losses for all open positions on every tick
+		await this.checkStopLosses();
 
 		// For 'auto' mode (LLM strategy), the strategy handles token discovery
 		// We call processToken once with null to trigger the strategy's internal token selection
@@ -643,4 +690,165 @@ export class AutoTradingManager extends Service {
 			totalTrades: metrics.totalTrades,
 		};
 	}
+
+	// ── Stop-Loss / Take-Profit ─────────────────────────────────────
+
+	/** Estimate ATR from price data */
+	private estimateATR(priceData?: OHLCV[]): number | null {
+		if (!priceData || priceData.length < 14) return null;
+		const recent = priceData.slice(-14);
+		const trueRanges = recent.map((candle, i) => {
+			if (i === 0) return candle.high - candle.low;
+			const prev = recent[i - 1];
+			return Math.max(
+				candle.high - candle.low,
+				Math.abs(candle.high - prev.close),
+				Math.abs(candle.low - prev.close),
+			);
+		});
+		return trueRanges.reduce((s, v) => s + v, 0) / trueRanges.length;
+	}
+
+	/** Check stop-loss and take-profit levels for all positions */
+	private async checkStopLosses(): Promise<void> {
+		for (const [symbol, position] of this.positions) {
+			const marketData = await this.getMarketData(symbol);
+			if (!marketData?.currentPrice) continue;
+
+			const atrValue = this.estimateATR(marketData.priceData);
+			const action = this.stopLossManager.update(symbol, marketData.currentPrice, atrValue ?? undefined);
+
+			if (action.action === "stop-loss") {
+				logger.warn(`[AutoTradingManager] Stop-loss triggered for ${symbol} at $${action.price.toFixed(2)}, stop: $${action.stopPrice?.toFixed(2)}`);
+				const order: TradeOrder = {
+					action: TradeType.SELL,
+					pair: `${symbol}/USDC`,
+					quantity: position.amount,
+					orderType: OrderType.MARKET,
+					timestamp: Date.now(),
+					reason: `Stop-loss at $${action.stopPrice?.toFixed(2)}`,
+				};
+				await this.executeTrade(order);
+			} else if (action.action === "take-profit-1") {
+				logger.info(`[AutoTradingManager] Take-profit 1 for ${symbol} at $${action.price.toFixed(2)}, selling ${((action.portion ?? 0.5) * 100).toFixed(0)}%`);
+				const sellQty = position.amount * (action.portion ?? 0.5);
+				const order: TradeOrder = {
+					action: TradeType.SELL,
+					pair: `${symbol}/USDC`,
+					quantity: sellQty,
+					orderType: OrderType.MARKET,
+					timestamp: Date.now(),
+					reason: `Take-profit 1 at $${action.price.toFixed(2)}`,
+				};
+				await this.executeTrade(order);
+			} else if (action.action === "take-profit-2") {
+				logger.info(`[AutoTradingManager] Take-profit 2 for ${symbol} at $${action.price.toFixed(2)}, closing position`);
+				const order: TradeOrder = {
+					action: TradeType.SELL,
+					pair: `${symbol}/USDC`,
+					quantity: position.amount,
+					orderType: OrderType.MARKET,
+					timestamp: Date.now(),
+					reason: `Take-profit 2 at $${action.price.toFixed(2)}`,
+				};
+				await this.executeTrade(order);
+			}
+		}
+	}
+
+	// ── DCA Scheduler ───────────────────────────────────────────────
+
+	/** Get Fear & Greed Index */
+	private async getFearGreedIndex(): Promise<number> {
+		try {
+			const resp = await fetch("https://api.alternative.me/fng/?limit=1");
+			if (resp.ok) {
+				const data = (await resp.json()) as { data: Array<{ value: string }> };
+				return parseInt(data.data[0].value);
+			}
+		} catch { /* fall through to default */ }
+		return 50; // neutral default
+	}
+
+	/** Check if DCA should execute */
+	private async checkDCA(): Promise<void> {
+		const shouldDCA = this.dcaScheduler.shouldExecuteNow();
+		if (!shouldDCA.execute || !shouldDCA.entry) return;
+
+		logger.info(`[AutoTradingManager] DCA entry #${shouldDCA.entry.week} due, executing`);
+
+		const prices: Record<string, number> = {};
+		for (const alloc of shouldDCA.entry.allocations) {
+			const marketData = await this.getMarketData(alloc.asset);
+			if (marketData?.currentPrice) prices[alloc.asset] = marketData.currentPrice;
+		}
+
+		if (Object.keys(prices).length === 0) {
+			logger.warn("[AutoTradingManager] DCA: no prices available, skipping");
+			return;
+		}
+
+		this.dcaScheduler.adjustForFearGreed(shouldDCA.entry, await this.getFearGreedIndex());
+
+		for (const alloc of shouldDCA.entry.allocations) {
+			if (!prices[alloc.asset]) continue;
+			const order: TradeOrder = {
+				action: TradeType.BUY,
+					pair: `${alloc.asset}/USDC`,
+					quantity: alloc.adjustedUsd / prices[alloc.asset],
+					orderType: OrderType.MARKET,
+					timestamp: Date.now(),
+					price: prices[alloc.asset],
+					reason: `DCA week ${shouldDCA.entry.week}`,
+				};
+			await this.executeTrade(order);
+		}
+
+		this.dcaScheduler.markExecuted(shouldDCA.entry.week, prices);
+	}
+
+	// ── Portfolio Rebalancer ────────────────────────────────────────
+
+	/** Check if portfolio needs rebalancing */
+	private async checkRebalance(): Promise<void> {
+		if (!this.rebalancer.shouldCheck()) return;
+
+		const holdings: Record<string, { quantity: number; avgPrice: number }> = {};
+		const prices: Record<string, number> = {};
+		const entryDates: Record<string, number> = {};
+
+		for (const [symbol, position] of this.positions) {
+			holdings[symbol] = { quantity: position.amount, avgPrice: position.entryPrice };
+			const marketData = await this.getMarketData(symbol);
+			if (marketData?.currentPrice) prices[symbol] = marketData.currentPrice;
+			entryDates[symbol] = Date.now();
+		}
+
+		const totalValue = await this.calculatePortfolioValue();
+		const result = this.rebalancer.check(holdings, prices, totalValue, entryDates);
+
+		if (result.orders.length === 0) return;
+
+		logger.info(`[AutoTradingManager] Rebalance needed: ${result.orders.length} orders, $${result.totalRebalanceUsd.toFixed(2)} total`);
+
+		for (const order of result.orders) {
+			const tradeOrder: TradeOrder = {
+				action: order.action === "BUY" ? TradeType.BUY : TradeType.SELL,
+				pair: `${order.asset}/USDC`,
+				quantity: order.quantity,
+				orderType: OrderType.MARKET,
+				timestamp: Date.now(),
+				reason: `Rebalance: ${order.action} ${order.asset} (drift ${(order.drift * 100).toFixed(1)}%)`,
+			};
+			await this.executeTrade(tradeOrder);
+		}
+
+		this.rebalancer.recordRebalance(result);
+	}
+
+	// ── Public accessors for new modules ────────────────────────────
+
+	getStopLossManager(): StopLossManager { return this.stopLossManager; }
+	getDCAScheduler(): DCAScheduler { return this.dcaScheduler; }
+	getRebalancer(): PortfolioRebalancer { return this.rebalancer; }
 }

@@ -23,10 +23,14 @@ import { tradingProvider } from "./providers/tradingProvider.ts";
 import { AutoTradingManager } from "./services/AutoTradingManager.ts";
 import { CopyTrading } from "./services/CopyTrading.ts";
 import { MarketConditionDetector } from "./services/MarketConditionDetector.ts";
+import { RegimeDetector } from "./services/RegimeDetector.ts";
 import { MultiStrategyManager } from "./services/MultiStrategyManager.ts";
 import { NotificationService } from "./services/NotificationService.ts";
 import { RiskDashboard } from "./services/RiskDashboard.ts";
 import { SentimentAnalyzer } from "./services/SentimentAnalyzer.ts";
+import { StopLossManager } from "./services/StopLossManager.ts";
+import { DCAScheduler } from "./services/DCAScheduler.ts";
+import { PortfolioRebalancer } from "./services/PortfolioRebalancer.ts";
 import { SwapService } from "./services/SwapService.ts";
 import { TokenResolverService } from "./services/TokenResolverService.ts";
 import { TokenValidationService } from "./services/TokenValidationService.ts";
@@ -58,6 +62,7 @@ const autoTraderPlugin: Plugin = {
 			AutoTradingManager,
 			MultiStrategyManager,
 			MarketConditionDetector,
+			RegimeDetector,
 			RiskDashboard,
 			TradeJournal,
 			SentimentAnalyzer as unknown as ServiceClass,

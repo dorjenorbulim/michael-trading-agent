@@ -61,6 +61,16 @@ const STRATEGY_INFO: Record<
 		bestFor: "Baseline testing",
 		riskLevel: "High",
 	},
+	"trend-following-v1": {
+		type: "Technical analysis",
+		bestFor: "Persistent trends (EMA stack, ADX > 20)",
+		riskLevel: "Low-Moderate",
+	},
+	"mean-reversion-simple-v1": {
+		type: "Statistical",
+		bestFor: "Range-bound markets, oversold bounces",
+		riskLevel: "Moderate",
+	},
 };
 
 export const strategyProvider: Provider = {
