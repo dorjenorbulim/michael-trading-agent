@@ -7,6 +7,7 @@ import {
 	ModelType,
 	parseJSONObjectFromText,
 } from "@elizaos/core";
+import { LayaGate } from "../services/LayaGate.ts";
 import type { TokenValidationService } from "../services/TokenValidationService.ts";
 import type {
 	AgentState,
@@ -81,6 +82,12 @@ export interface LLMStrategyConfig {
 	lowConfidenceSizeFactor: number;
 	/** JSONL decision log for calibration analysis; empty string disables */
 	calibrationLogPath: string;
+	/** Path to a python with laya-mlx installed; empty string disables the fast local regime gate */
+	layaPython: string;
+	/** laya-mlx checkpoint to load */
+	layaModel: string;
+	/** laya bridge script path */
+	layaBridge: string;
 	birdeyeApiKey?: string;
 }
 
@@ -97,6 +104,9 @@ const DEFAULT_CONFIG: LLMStrategyConfig = {
 	fullConfidence: 0.75,
 	lowConfidenceSizeFactor: 0.5,
 	calibrationLogPath: "data/llm-calibration.jsonl",
+	layaPython: "",
+	layaModel: "aac6fef/laya-mlx",
+	layaBridge: "scripts/laya_bridge.py",
 };
 
 const KNOWN_REGIMES = ["trending", "mean_reverting", "high_vol", "chaotic"];
@@ -170,6 +180,8 @@ export class LLMStrategy implements TradingStrategy {
 
 	private runtime: IAgentRuntime | null = null;
 	private config: LLMStrategyConfig;
+	/** Optional laya-mlx gate: fast local regime read (milliseconds, free) */
+	private layaGate: LayaGate | null = null;
 	private previousPicks: Array<{
 		timestamp: number;
 		token: string;
@@ -243,6 +255,20 @@ export class LLMStrategy implements TradingStrategy {
 			const calibrationSetting = runtime.getSetting("LLM_CALIBRATION_LOG");
 			if (calibrationSetting !== undefined && calibrationSetting !== null) {
 				this.config.calibrationLogPath = String(calibrationSetting);
+			}
+
+			// Optional reflex layer: laya-mlx reads the market regime locally
+			// in milliseconds (free, private). Off unless LAYA_PYTHON is set.
+			const layaPythonSetting = runtime.getSetting("LAYA_PYTHON");
+			if (layaPythonSetting) {
+				this.layaGate = new LayaGate({
+					pythonPath: String(layaPythonSetting),
+					bridgePath: String(
+						runtime.getSetting("LAYA_BRIDGE") || this.config.layaBridge,
+					),
+					model: String(runtime.getSetting("LAYA_MODEL") || this.config.layaModel),
+				});
+				logger.info(`[${this.name}] laya decision gate enabled: ${this.config.layaModel}`);
 			}
 
 			logger.info(
@@ -338,11 +364,37 @@ export class LLMStrategy implements TradingStrategy {
 			return null;
 		}
 
+		// Fast local regime read via the laya gate (optional reflex layer).
+		// Every failure degrades silently — the LLM battery continues as before.
+		let layaRegime: string | null = null;
+		let layaConfidence: number | null = null;
+		if (this.layaGate) {
+			try {
+				const regime = await this.layaGate.classifyRegime({
+					currentPrice: params.marketData.currentPrice,
+					recentPrices: params.marketData.lastPrices.slice(-5),
+				});
+				if (regime) {
+					layaRegime = regime.choice;
+					layaConfidence = regime.confidence;
+					logger.info(
+						`[${this.name}] laya regime read: ${regime.choice} (${regime.confidence.toFixed(2)})`,
+					);
+				}
+			} catch (err) {
+				logger.info(
+					`[${this.name}] laya regime read skipped: ${err instanceof Error ? err.message : String(err)}`,
+				);
+			}
+		}
+
 		// Get LLM decision from pre-validated tokens only
 		const decision = await this.getLLMDecision(
 			runtime,
 			validTokens,
 			params.portfolioSnapshot.totalValue,
+			layaRegime,
+			layaConfidence,
 		);
 
 		if (
@@ -511,6 +563,7 @@ export class LLMStrategy implements TradingStrategy {
 			riskScore: decision.riskScore,
 			buyAmountPercentRaw: decision.buyAmountPercent,
 			buyPercentFinal: buyPercent,
+			layaRegime: decision.layaRegime ?? null,
 			currentPrice: decision.currentPrice,
 			stopLossPrice: decision.stopLossPrice,
 			takeProfitPrice: decision.takeProfitPrice,
@@ -667,6 +720,8 @@ export class LLMStrategy implements TradingStrategy {
 		runtime: IAgentRuntime,
 		trendingTokens: TrendingToken[],
 		portfolioValue: number,
+		layaRegime?: string | null,
+		layaConfidence?: number | null,
 	): Promise<LLMTradingDecision | null> {
 		// Format trending tokens for prompt
 		const tokensText = trendingTokens
@@ -689,12 +744,24 @@ export class LLMStrategy implements TradingStrategy {
 
 		const systemPrompt =
 			"You are an expert cryptocurrency trading analyst. Respond only with valid JSON.";
-		const userPrompt = TRADING_DECISION_PROMPT.replace(
+		let userPrompt = TRADING_DECISION_PROMPT.replace(
 			"{{trendingTokens}}",
 			tokensText,
 		)
 			.replace("{{previousPicks}}", previousPicksText)
 			.replace("PORTFOLIO_VALUE_PLACEHOLDER", portfolioValue.toFixed(2));
+
+		// Fast local regime read (optional laya gate): a millisecond-scale
+		// second opinion the battery can weigh. Clearly marked as possibly
+		// wrong — the model treats it as one signal among many.
+		if (layaRegime) {
+			userPrompt +=
+				`\n\nFast local regime read (may be wrong): ${layaRegime}` +
+				(layaConfidence != null
+					? ` (confidence ${layaConfidence.toFixed(2)})`
+					: "") +
+				".";
+		}
 
 		const response = await this.callLLM(
 			runtime,
@@ -719,6 +786,8 @@ export class LLMStrategy implements TradingStrategy {
 		if (!decision) {
 			return null; // validation failure already logged
 		}
+		decision.layaRegime = layaRegime ?? null;
+		decision.layaConfidence = layaConfidence ?? null;
 
 		logger.debug(
 			`[${this.name}] LLM decision: pickedNothing=${decision.pickedNothing} buyIndex=${decision.recommendBuyIndex} opportunity=${decision.opportunityScore} risk=${decision.riskScore}`,
