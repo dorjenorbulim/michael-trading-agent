@@ -26,6 +26,8 @@ import { MarketConditionDetector } from "./services/MarketConditionDetector.ts";
 import { RegimeDetector } from "./services/RegimeDetector.ts";
 import { MultiStrategyManager } from "./services/MultiStrategyManager.ts";
 import { NotificationService } from "./services/NotificationService.ts";
+import { NewsTriage } from "./services/NewsTriage.ts";
+import { WatchlistBrief } from "./services/WatchlistBrief.ts";
 import { RiskDashboard } from "./services/RiskDashboard.ts";
 import { SentimentAnalyzer } from "./services/SentimentAnalyzer.ts";
 import { StopLossManager } from "./services/StopLossManager.ts";
@@ -72,6 +74,8 @@ const autoTraderPlugin: Plugin = {
 			TokenValidationService as unknown as ServiceClass,
 			TokenResolverService as unknown as ServiceClass,
 			TradingTrajectoryService,
+			WatchlistBrief as unknown as ServiceClass,
+			NewsTriage as unknown as ServiceClass,
 		],
 	actions: [
 		startTradingAction,
