@@ -108,9 +108,39 @@ export class WatchlistBrief extends Service {
 		const rows = await this.fetchMarketRows(this.symbols(), fetchFn);
 		const sentiment = await this.collectSentiment(this.symbols());
 		const trending = await this.fetchTrending(fetchFn);
-		const brief = this.compileBrief(rows, sentiment, trending, now);
+		const screener = await this.screenerSection();
+		const brief = this.compileBrief(rows, sentiment, trending, now, screener);
 		await this.deliver(brief);
 		return brief;
+	}
+
+	/**
+	 * Optional screener section via the TradingView MCP bridge (when the
+	 * reflex layer is enabled): top gainers across Binance, from public data.
+	 * Any failure returns an empty string — the brief never breaks on it.
+	 */
+	private async screenerSection(): Promise<string> {
+		try {
+			const bridge = this.runtime?.getService(
+				"tradingview-mcp",
+			) as unknown as
+				| {
+						isUsable?: () => boolean;
+						topMovers?: (
+							exchange: string,
+							direction: "gainers" | "losers",
+						) => Promise<{ text: string }>;
+				  }
+				| null;
+			if (!bridge?.topMovers) return "";
+			if (bridge.isUsable && !bridge.isUsable()) return "";
+			const res = await bridge.topMovers("BINANCE", "gainers");
+			const text = (res?.text ?? "").trim();
+			if (!text) return "";
+			return `\n📈 Screener (Binance 1d):\n${text.slice(0, 400)}`;
+		} catch {
+			return "";
+		}
 	}
 
 	private async fetchMarketRows(
@@ -190,6 +220,7 @@ export class WatchlistBrief extends Service {
 		sentiment: Record<string, number>,
 		trending: string[],
 		now: Date = new Date(),
+		screenerSection = "",
 	): string {
 		const lines: string[] = [];
 		lines.push(
@@ -213,6 +244,9 @@ export class WatchlistBrief extends Service {
 		}
 		if (trending.length > 0) {
 			lines.push("", `🔥 Trending: ${trending.join(", ")}`);
+		}
+		if (screenerSection) {
+			lines.push(screenerSection);
 		}
 		return lines.join("\n");
 	}
