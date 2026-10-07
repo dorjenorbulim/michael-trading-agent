@@ -1,6 +1,6 @@
 # Michael's Crypto Trading Bot 🤖📈
 
-An AI-powered crypto trading agent with live Binance paper trading, 14 multi-strategy management, real-time analytics dashboard, strategy auto-switching, and token safety guard.
+An AI-powered crypto trading agent with live paper trading (CoinGecko prices), 14 multi-strategy management, real-time analytics dashboard, strategy auto-switching, and token safety guard.
 
 > Standalone Node.js trading API server — no ElizaOS dependency required.
 

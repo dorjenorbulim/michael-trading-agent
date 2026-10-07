@@ -41,6 +41,14 @@ const TAKE_PROFIT_PERCENT = 0.15;
 // 8 trades/day cap: at small capital, more trades means fees eat the balance
 const MAX_TRADES_PER_DAY = 8;
 
+// SGX value-up scanner feed (research-only) — bridged from vibe-trading-sg.
+// SGX tickers are NEVER traded here: there is no SGX price source and the
+// crypto loop must not touch them. These surface as RESEARCH alerts only.
+const SGX_SCAN_DIR = '/Volumes/Subhuti Main/OPENCLAW-WORKSPACE/vibe trading/vibe-trading-sg/output';
+const SGX_SCAN_PREFIX = 'multibaggers_SGX_';
+let sgxSignals = [];
+let lastSgxAlertDate = ''; // dedupe: one activity burst per scan date
+
 // Strategies the auto-switcher must never select (broken, unreliable, or
 // dependent on volume indicators that were unreliable at small capital)
 const DISABLED_STRATEGIES = new Set(['random', 'llm', 'scalp', 'breakout', 'momentum-breakout']);
@@ -795,6 +803,95 @@ strategies['llm'] = strategies.llm;
 strategies['rule'] = strategies['rule-based'];
 strategies['random'] = strategies.random;
 
+// ============ SGX VALUE-UP SCANNER BRIDGE (RESEARCH-ONLY) ============
+// Reads the latest multibaggers_SGX_*.csv from the vibe-trading-sg scanner
+// and surfaces the value-up candidates as RESEARCH alerts. SGX tickers are
+// NEVER traded (no SGX price source); the crypto loop ignores them.
+
+// Minimal CSV line parser — honors double-quoted fields
+function parseCsvLine(line) {
+  const out = [];
+  let cur = '', inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; }
+        else inQuotes = false;
+      } else cur += ch;
+    } else if (ch === '"') inQuotes = true;
+    else if (ch === ',') { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+function sgxTier(pb) {
+  const v = Number(pb);
+  if (!Number.isFinite(v)) return 'standard';
+  if (v < 0.3) return 'deep-value';
+  if (v < 0.5) return 'gold';
+  return 'standard';
+}
+
+// Read the newest SGX scan CSV; return { file, scanDate, rows }. Never throws.
+function loadLatestSgxScan() {
+  try {
+    if (!fs.existsSync(SGX_SCAN_DIR)) return { file: null, scanDate: null, rows: [] };
+    const files = fs.readdirSync(SGX_SCAN_DIR)
+      .filter(f => f.startsWith(SGX_SCAN_PREFIX) && f.endsWith('.csv'))
+      .sort(); // ISO-date filenames sort lexicographically → newest last
+    if (files.length === 0) return { file: null, scanDate: null, rows: [] };
+    const file = files[files.length - 1];
+    const scanDate = file.slice(SGX_SCAN_PREFIX.length, -'.csv'.length);
+    const raw = fs.readFileSync(`${SGX_SCAN_DIR}/${file}`, 'utf8');
+    const lines = raw.split(/\r?\n/).filter(l => l.trim().length > 0);
+    if (lines.length < 2) return { file, scanDate, rows: [] };
+    const header = parseCsvLine(lines[0]).map(h => h.trim());
+    const rows = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cells = parseCsvLine(lines[i]);
+      const row = {};
+      header.forEach((h, idx) => { row[h] = (cells[idx] ?? '').trim(); });
+      rows.push(row);
+    }
+    return { file, scanDate, rows };
+  } catch (e) {
+    console.log('[SGX] Failed to load scan CSV:', e.message);
+    return { file: null, scanDate: null, rows: [] };
+  }
+}
+
+// Reload sgxSignals and surface one RESEARCH alert per candidate (deduped).
+function refreshSgxSignals() {
+  const { file, scanDate, rows } = loadLatestSgxScan();
+  sgxSignals = rows.map(r => ({
+    ticker: r.ticker,
+    name: r.name,
+    sector: r.sector,
+    price: Number(r.price_local) || 0,
+    pb: Number(r.pb) || 0,
+    pe: Number(r.pe) || 0,
+    roe_pct: Number(r.roe_pct) || 0,
+    score: Number(r.score) || 0,
+    tier: sgxTier(r.pb),
+    flagged: true,
+    type: 'research'
+  })).sort((a, b) => b.score - a.score);
+
+  if (scanDate && sgxSignals.length > 0 && scanDate !== lastSgxAlertDate) {
+    lastSgxAlertDate = scanDate;
+    sgxSignals.forEach(s => {
+      logActivity('RESEARCH', s.ticker, s.price, 'value-up',
+        `SGX value-up candidate: ${s.name} | PB ${s.pb} | PE ${s.pe} | ROE ${s.roe_pct}% | score ${s.score} | tier ${s.tier} (research-only, not traded)`,
+        'sgx-scanner');
+    });
+    console.log(`[SGX] ${sgxSignals.length} value-up candidates from ${file} (scan ${scanDate})`);
+  }
+  return { file, scanDate, total: sgxSignals.length };
+}
+
 function generateSignal(token) {
   const strategy = strategies[activeStrategy] || strategies.mixed;
   return strategy(token);
@@ -1191,6 +1288,15 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(stratInfo));
     }
+    else if (url === '/api/sgx-signals' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, total: sgxSignals.length, data: sgxSignals }));
+    }
+    else if (url === '/api/sgx-signals/refresh' && req.method === 'POST') {
+      const result = refreshSgxSignals();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, total: result.total, scanDate: result.scanDate, file: result.file }));
+    }
     else if (url === '/health' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'ok', autoTradingEnabled }));
@@ -1225,4 +1331,6 @@ server.listen(PORT, () => {
   fetchPrices().then(() => {
     console.log(`\n📈 Prices: BTC $${prices.BTC} | ETH $${prices.ETH} | SOL $${prices.SOL}\n`);
   });
+
+  refreshSgxSignals(); // load SGX research feed once at startup
 });
