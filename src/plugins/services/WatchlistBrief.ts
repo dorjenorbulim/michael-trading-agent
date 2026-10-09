@@ -109,9 +109,33 @@ export class WatchlistBrief extends Service {
 		const sentiment = await this.collectSentiment(this.symbols());
 		const trending = await this.fetchTrending(fetchFn);
 		const screener = await this.screenerSection();
-		const brief = this.compileBrief(rows, sentiment, trending, now, screener);
+		const kronos = await this.kronosSection(fetchFn);
+		const brief = this.compileBrief(rows, sentiment, trending, now, screener, kronos);
 		await this.deliver(brief);
 		return brief;
+	}
+
+	/**
+	 * Optional Kronos forecast section via the kronos-forecast service:
+	 * the foundation model's 24h outlook for BTC (local, free). Empty on
+	 * any failure — the brief never breaks on the reflex layer.
+	 */
+	private async kronosSection(fetchFn: typeof fetch): Promise<string> {
+		try {
+			const k = this.runtime?.getService(
+				"kronos-forecast",
+			) as unknown as
+				| {
+						isUsable?: () => boolean;
+						briefSection?: (fetchFn: typeof fetch) => Promise<string>;
+				  }
+				| null;
+			if (!k?.briefSection) return "";
+			if (k.isUsable && !k.isUsable()) return "";
+			return await k.briefSection(fetchFn);
+		} catch {
+			return "";
+		}
 	}
 
 	/**
@@ -221,6 +245,7 @@ export class WatchlistBrief extends Service {
 		trending: string[],
 		now: Date = new Date(),
 		screenerSection = "",
+		kronosSection = "",
 	): string {
 		const lines: string[] = [];
 		lines.push(
@@ -247,6 +272,9 @@ export class WatchlistBrief extends Service {
 		}
 		if (screenerSection) {
 			lines.push(screenerSection);
+		}
+		if (kronosSection) {
+			lines.push(kronosSection);
 		}
 		return lines.join("\n");
 	}

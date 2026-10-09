@@ -29,6 +29,7 @@ import { NotificationService } from "./services/NotificationService.ts";
 import { NewsTriage } from "./services/NewsTriage.ts";
 import { WatchlistBrief } from "./services/WatchlistBrief.ts";
 import { TradingViewMcpService } from "./services/TradingViewMcp.ts";
+import { KronosForecastService } from "./services/KronosForecast.ts";
 import { RiskDashboard } from "./services/RiskDashboard.ts";
 import { SentimentAnalyzer } from "./services/SentimentAnalyzer.ts";
 import { StopLossManager } from "./services/StopLossManager.ts";
@@ -78,6 +79,7 @@ const autoTraderPlugin: Plugin = {
 			WatchlistBrief as unknown as ServiceClass,
 			NewsTriage as unknown as ServiceClass,
 			TradingViewMcpService as unknown as ServiceClass,
+			KronosForecastService as unknown as ServiceClass,
 		],
 	actions: [
 		startTradingAction,
